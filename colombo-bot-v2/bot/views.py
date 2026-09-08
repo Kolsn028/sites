@@ -8,6 +8,7 @@ from datetime import date, timedelta
 import discord
 
 from .ui import base_embed, activity_type_label
+from .interactions import SafeModal, SafeView, serialized, private_thread
 
 
 def _id_from_title(message: discord.Message | None, prefix: str) -> int | None:
@@ -23,7 +24,7 @@ def _thread_name(name: str, uid: int) -> str:
     return f"заявка-{name}"[:100]
 
 
-class ApplicationModal(discord.ui.Modal, title="Подать заявку"):
+class ApplicationModal(SafeModal, title="Подать заявку"):
     real_name_age = discord.ui.TextInput(label="Имя, возраст IRL и игровой ник", max_length=160)
     majestic_experience = discord.ui.TextInput(label="Ваш опыт на Majestic", max_length=500)
     shooting_skill = discord.ui.TextInput(label="Откат / уровень стрельбы", required=False, max_length=300)
@@ -34,6 +35,7 @@ class ApplicationModal(discord.ui.Modal, title="Подать заявку"):
         super().__init__(timeout=300)
         self.bot = bot
 
+    @serialized("application_submit", by_user=True)
     async def on_submit(self, interaction: discord.Interaction):
         if not interaction.guild or not isinstance(interaction.user, discord.Member):
             return
@@ -45,6 +47,9 @@ class ApplicationModal(discord.ui.Modal, title="Подать заявку"):
             return await interaction.response.send_message("⚠️ Система заявок не настроена. Выполните `/setup`.", ephemeral=True)
 
         await interaction.response.defer(ephemeral=True, thinking=True)
+        existing = await self.bot.db._one("SELECT id,thread_id FROM applications WHERE guild_id=? AND applicant_id=? AND status IN ('pending','interview') AND thread_id IS NOT NULL ORDER BY id DESC LIMIT 1", (interaction.guild.id, interaction.user.id))
+        if existing:
+            return await interaction.followup.send(f"Твоя заявка уже рассматривается: <#{existing['thread_id']}>.", ephemeral=True)
         now = self.bot.now_iso()
         app_id = await self.bot.db.create_application(
             guild_id=interaction.guild.id,
@@ -61,26 +66,12 @@ class ApplicationModal(discord.ui.Modal, title="Подать заявку"):
             updated_at=now,
         )
 
-        anchor = await parent.send(embed=base_embed(f"🆕 Новая заявка #{app_id}", f"Кандидат: {interaction.user.mention}"))
-        thread = await anchor.create_thread(
-            name=_thread_name(interaction.user.display_name, interaction.user.id),
-            type=discord.ChannelType.private_thread,
-            invitable=False,
-            auto_archive_duration=1440,
-            reason=f"Заявка #{app_id}",
-        )
         try:
-            await thread.add_user(interaction.user)
-        except discord.DiscordException:
-            pass
-        for recruiter in recruiter_role.members:
-            if recruiter.bot:
-                continue
-            try:
-                await thread.add_user(recruiter)
-                await asyncio.sleep(0.03)
-            except discord.DiscordException:
-                pass
+            thread = await private_thread(parent, interaction.user, [recruiter_role],
+                                          f"заявка-{app_id}-{interaction.user.display_name}")
+        except Exception:
+            await self.bot.db.update_application(app_id, status="failed", updated_at=self.bot.now_iso())
+            raise
 
         await self.bot.db.update_application(app_id, thread_id=thread.id)
         e = base_embed(f"📋 Заявка #{app_id} • {interaction.user.display_name}", f"Кандидат: {interaction.user.mention}\nID: `{interaction.user.id}`")
@@ -91,14 +82,19 @@ class ApplicationModal(discord.ui.Modal, title="Подать заявку"):
         e.add_field(name="📊 LVL / онлайн / часовой пояс", value=str(self.level_online_tz)[:1024], inline=False)
         e.add_field(name="🏠 Опыт в семьях", value=str(self.family_experience)[:1024], inline=False)
         e.add_field(name="Статус", value="🟡 На рассмотрении", inline=False)
-        await thread.send(content=f"{interaction.user.mention} <@&{recruiter_role.id}>", embed=e, view=RecruiterActionView(self.bot))
+        try:
+            await thread.send(content=f"{interaction.user.mention} <@&{recruiter_role.id}>", embed=e, view=RecruiterActionView(self.bot))
+        except Exception:
+            await self.bot.db.update_application(app_id, status="failed", updated_at=self.bot.now_iso())
+            await thread.delete(reason="Colombo: не удалось отправить анкету")
+            raise
 
         log = await log_ch.send(embed=base_embed(f"📥 Новая заявка #{app_id}", f"{interaction.user.mention}\nВетка: {thread.mention}"))
         await self.bot.db.update_application(app_id, log_message_id=log.id)
         await interaction.followup.send(f"✅ Заявка **#{app_id}** отправлена: {thread.mention}", ephemeral=True)
 
 
-class ApplicationPanelView(discord.ui.View):
+class ApplicationPanelView(SafeView):
     def __init__(self, bot):
         super().__init__(timeout=None)
         self.bot = bot
@@ -124,6 +120,7 @@ class RecruiterActionSelect(discord.ui.Select):
             ],
         )
 
+    @serialized("recruiter_decision")
     async def callback(self, interaction: discord.Interaction):
         if not interaction.guild or not isinstance(interaction.user, discord.Member):
             return
@@ -133,6 +130,9 @@ class RecruiterActionSelect(discord.ui.Select):
         if not app:
             return await interaction.response.send_message("Заявка не найдена.", ephemeral=True)
 
+        if app["status"] in ("accepted", "rejected"):
+            return await interaction.response.send_message("Эта заявка уже закрыта.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True, thinking=True)
         action = self.values[0]
         cfg = await self.bot.db.get_config(interaction.guild.id)
         applicant = interaction.guild.get_member(app["applicant_id"])
@@ -141,7 +141,7 @@ class RecruiterActionSelect(discord.ui.Select):
             text_ch = interaction.guild.get_channel(cfg.get("interview_channel_id") or 0)
             voice_ch = interaction.guild.get_channel(cfg.get("interview_voice_channel_id") or 0)
             if not isinstance(text_ch, discord.TextChannel):
-                return await interaction.response.send_message("⚠️ Канал обзвона не настроен.", ephemeral=True)
+                return await interaction.followup.send("⚠️ Канал обзвона не настроен.", ephemeral=True)
             await self.bot.db.update_application(app["id"], status="interview", handled_by=interaction.user.id, updated_at=self.bot.now_iso())
             await text_ch.send(content=f"<@{app['applicant_id']}>", embed=base_embed(f"📞 Вызов на обзвон • заявка #{app['id']}", f"Кандидат: <@{app['applicant_id']}>\nРекрутер: {interaction.user.mention}\nГолосовой: {voice_ch.mention if voice_ch else 'не настроен'}", 0x5865F2))
             if os.getenv("MOVE_TO_INTERVIEW_VOICE", "false").lower() == "true" and applicant and applicant.voice and isinstance(voice_ch, discord.VoiceChannel):
@@ -149,15 +149,20 @@ class RecruiterActionSelect(discord.ui.Select):
                     await applicant.move_to(voice_ch)
                 except discord.DiscordException:
                     pass
-            return await interaction.response.send_message(f"📞 Вызов отправлен в {text_ch.mention}.", ephemeral=True)
+            if applicant:
+                try:
+                    await applicant.send(embed=base_embed("Приглашение на обзвон • Colombo", f"Твоя заявка принята на следующий этап.\nКанал беседы: {voice_ch.mention if voice_ch else text_ch.mention}\nВетка: {interaction.channel.jump_url}"))
+                except discord.Forbidden:
+                    pass
+            return await interaction.followup.send(f"📞 Вызов отправлен в {text_ch.mention}.", ephemeral=True)
 
         if action == "hold":
             await self.bot.db.update_application(app["id"], status="pending", handled_by=interaction.user.id, updated_at=self.bot.now_iso())
-            await interaction.response.send_message("⏳ Оставлено на рассмотрении.", ephemeral=True)
+            await interaction.followup.send("⏳ Оставлено на рассмотрении.", ephemeral=True)
             return
 
         if app["status"] in ("accepted", "rejected"):
-            return await interaction.response.send_message("Эта заявка уже закрыта.", ephemeral=True)
+            return await interaction.followup.send("Эта заявка уже закрыта.", ephemeral=True)
 
         accepted = action == "accept"
         status = "accepted" if accepted else "rejected"
@@ -172,9 +177,9 @@ class RecruiterActionSelect(discord.ui.Select):
                 try:
                     await applicant.add_roles(role, reason=f"Заявка #{app['id']}")
                 except discord.DiscordException:
-                    pass
+                    await interaction.followup.send("Решение сохранено, но роль не выдана. Проверь Manage Roles и положение роли бота.", ephemeral=True)
 
-        await interaction.response.send_message("✅ Решение сохранено.", ephemeral=True)
+        await interaction.followup.send("✅ Решение сохранено.", ephemeral=True)
         await interaction.channel.send(embed=base_embed(title, f"Рекрутер: {interaction.user.mention}\nКандидат: <@{app['applicant_id']}>", color))
         await self.bot.send_or_update_leaderboard(interaction.guild)
 
@@ -191,13 +196,13 @@ class RecruiterActionSelect(discord.ui.Select):
                 pass
 
 
-class RecruiterActionView(discord.ui.View):
+class RecruiterActionView(SafeView):
     def __init__(self, bot):
         super().__init__(timeout=None)
         self.add_item(RecruiterActionSelect(bot))
 
 
-class VacationModal(discord.ui.Modal, title="Заявка на отдых"):
+class VacationModal(SafeModal, title="Заявка на отдых"):
     reason = discord.ui.TextInput(label="Причина отдыха", style=discord.TextStyle.paragraph, max_length=700)
     days = discord.ui.TextInput(label="На сколько дней?", placeholder="Напр.: 7", max_length=3)
 
@@ -205,6 +210,7 @@ class VacationModal(discord.ui.Modal, title="Заявка на отдых"):
         super().__init__(timeout=300)
         self.bot = bot
 
+    @serialized("vacation_submit", by_user=True)
     async def on_submit(self, interaction: discord.Interaction):
         try:
             days = int(str(self.days).strip())
@@ -218,18 +224,37 @@ class VacationModal(discord.ui.Modal, title="Заявка на отдых"):
         review_ch = interaction.guild.get_channel(cfg.get("vacation_review_channel_id") or 0)
         if not isinstance(review_ch, discord.TextChannel):
             return await interaction.response.send_message("Канал отпусков не настроен.", ephemeral=True)
+        accepted = cfg.get("accepted_role_id")
+        if not interaction.user.guild_permissions.administrator and accepted and not interaction.user.get_role(accepted):
+            return await interaction.response.send_message("Отдых доступен участникам семьи.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True, thinking=True)
         start, end = date.today(), date.today() + timedelta(days=days)
         vid = await self.bot.db.create_vacation(guild_id=interaction.guild.id, member_id=interaction.user.id, member_tag=str(interaction.user), reason=str(self.reason), start_date=start.isoformat(), end_date=end.isoformat(), status="pending", created_at=self.bot.now_iso(), updated_at=self.bot.now_iso())
         e = base_embed(f"🌴 Заявка на отдых #{vid}", f"Участник: {interaction.user.mention}", 0xD5A43A)
         e.add_field(name="Причина", value=str(self.reason)[:1024], inline=False)
         e.add_field(name="Период", value=f"{start.strftime('%d.%m.%Y')} → {end.strftime('%d.%m.%Y')} ({days} дн.)", inline=False)
         e.add_field(name="Статус", value="🟡 Ожидает решения", inline=False)
-        msg = await review_ch.send(embed=e, view=VacationDecisionView(self.bot))
+        leaders = [interaction.guild.get_role(cfg.get(key) or 0) for key in ("assistant_leader_role_id", "dep_leader_role_id")]
+        if not any(leaders):
+            await self.bot.db.update_vacation(vid, status="failed", updated_at=self.bot.now_iso())
+            raise ValueError("Настрой роли руководства через `/setup_auto`.")
+        try:
+            thread = await private_thread(review_ch, interaction.user, leaders, f"отдых-{vid}-{interaction.user.display_name}")
+        except Exception:
+            await self.bot.db.update_vacation(vid, status="failed", updated_at=self.bot.now_iso())
+            raise
+        await self.bot.db.update_vacation(vid, thread_id=thread.id)
+        try:
+            msg = await thread.send(embed=e, view=VacationDecisionView(self.bot))
+        except Exception:
+            await self.bot.db.update_vacation(vid, status="failed", updated_at=self.bot.now_iso())
+            await thread.delete(reason="Colombo: не удалось отправить заявку отдыха")
+            raise
         await self.bot.db.update_vacation(vid, review_message_id=msg.id)
-        await interaction.response.send_message(f"✅ Заявка на отдых **#{vid}** отправлена.", ephemeral=True)
+        await interaction.followup.send(f"Заявка на отдых **#{vid}** отправлена: {thread.mention}", ephemeral=True)
 
 
-class VacationPanelView(discord.ui.View):
+class VacationPanelView(SafeView):
     def __init__(self, bot):
         super().__init__(timeout=None)
         self.bot = bot
@@ -239,11 +264,12 @@ class VacationPanelView(discord.ui.View):
         await interaction.response.send_modal(VacationModal(self.bot))
 
 
-class VacationDecisionView(discord.ui.View):
+class VacationDecisionView(SafeView):
     def __init__(self, bot):
         super().__init__(timeout=None)
         self.bot = bot
 
+    @serialized("vacation_decision")
     async def _handle(self, interaction: discord.Interaction, approve: bool):
         if not isinstance(interaction.user, discord.Member) or not await self.bot.can_review_vacation(interaction.user):
             return await interaction.response.send_message("⛔ Недостаточно прав.", ephemeral=True)
@@ -251,6 +277,7 @@ class VacationDecisionView(discord.ui.View):
         vac = await self.bot.db.get_vacation(vid) if vid else None
         if not vac or vac["status"] != "pending":
             return await interaction.response.send_message("Заявка уже обработана или не найдена.", ephemeral=True)
+        await interaction.response.defer()
         status = "approved" if approve else "rejected"
         await self.bot.db.update_vacation(vac["id"], status=status, handled_by=interaction.user.id, updated_at=self.bot.now_iso())
         member = interaction.guild.get_member(vac["member_id"])
@@ -261,13 +288,15 @@ class VacationDecisionView(discord.ui.View):
                 try:
                     await member.add_roles(role)
                 except discord.DiscordException:
-                    pass
+                    await interaction.followup.send("Отдых одобрен, но роль выдать не удалось. Проверь права и положение роли бота.", ephemeral=True)
         e = interaction.message.embeds[0].copy()
         e.color = 0x3BAA72 if approve else 0xD64045
         e.set_field_at(2, name="Статус", value=("✅ Одобрено" if approve else "❌ Отклонено") + f" • {interaction.user.mention}", inline=False)
-        await interaction.response.edit_message(embed=e, view=None)
+        await interaction.edit_original_response(embed=e, view=None)
         await self.bot.update_vacation_status(interaction.guild)
         await self.bot.update_inactivity_report(interaction.guild)
+        if isinstance(interaction.channel, discord.Thread):
+            await interaction.channel.edit(archived=True, locked=True, reason="Colombo: решение по отдыху принято")
 
     @discord.ui.button(label="Одобрить", emoji="✅", style=discord.ButtonStyle.success, custom_id="colombo:vacation:approve")
     async def approve(self, interaction, _button):
@@ -278,7 +307,7 @@ class VacationDecisionView(discord.ui.View):
         await self._handle(interaction, False)
 
 
-class CasePanelView(discord.ui.View):
+class CasePanelView(SafeView):
     def __init__(self, bot):
         super().__init__(timeout=None)
         self.bot = bot
@@ -314,6 +343,8 @@ class ActivityTypeSelect(discord.ui.Select):
             return await interaction.response.send_message("Отчёт не найден.", ephemeral=True)
         if interaction.user.id != sub["member_id"] and not await self.bot.is_high_staff(interaction.user):
             return await interaction.response.send_message("⛔ Только владелец дела или High Staff.", ephemeral=True)
+        if sub["status"] != "pending_classification":
+            return await interaction.response.send_message("Тип уже выбран или отчёт обработан.", ephemeral=True)
         cat = self.values[0]
         points = self.bot.activity_points(cat)
         await self.bot.db.update_activity(sub["id"], category=cat, points=points, status="pending_review", updated_at=self.bot.now_iso())
@@ -325,13 +356,13 @@ class ActivityTypeSelect(discord.ui.Select):
         await interaction.response.edit_message(embed=e, view=ActivityReviewView(self.bot))
 
 
-class ActivityClassifyView(discord.ui.View):
+class ActivityClassifyView(SafeView):
     def __init__(self, bot):
         super().__init__(timeout=None)
         self.add_item(ActivityTypeSelect(bot))
 
 
-class RejectActivityModal(discord.ui.Modal, title="Отклонить активность"):
+class RejectActivityModal(SafeModal, title="Отклонить активность"):
     reason = discord.ui.TextInput(label="Причина", style=discord.TextStyle.paragraph, max_length=500)
 
     def __init__(self, bot, sid: int, message: discord.Message):
@@ -349,7 +380,7 @@ class RejectActivityModal(discord.ui.Modal, title="Отклонить актив
         await interaction.response.edit_message(embed=e, view=None)
 
 
-class ActivityReviewView(discord.ui.View):
+class ActivityReviewView(SafeView):
     def __init__(self, bot):
         super().__init__(timeout=None)
         self.bot = bot
@@ -396,3 +427,4 @@ class ActivityReviewView(discord.ui.View):
         e.set_field_at(1, name="Баллы", value="—", inline=True)
         e.set_field_at(2, name="Статус", value="🟡 Нужно выбрать тип", inline=False)
         await interaction.response.edit_message(embed=e, view=ActivityClassifyView(self.bot))
+

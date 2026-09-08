@@ -130,6 +130,12 @@ class Database:
         existing = {row[1] for row in await cur.fetchall()}
         needed = {
             "case_panel_channel_id": "INTEGER",
+            "recruitment_category_id": "INTEGER",
+            "family_category_id": "INTEGER",
+            "management_category_id": "INTEGER",
+            "application_panel_message_id": "INTEGER",
+            "vacation_panel_message_id": "INTEGER",
+            "case_panel_message_id": "INTEGER",
             "case_category_id": "INTEGER",
             "high_staff_role_id": "INTEGER",
             "activity_log_channel_id": "INTEGER",
@@ -139,6 +145,9 @@ class Database:
         for column, sql_type in needed.items():
             if column not in existing:
                 await self.conn.execute(f"ALTER TABLE guild_config ADD COLUMN {column} {sql_type}")
+        cur = await self.conn.execute("PRAGMA table_info(vacations)")
+        if "thread_id" not in {row[1] for row in await cur.fetchall()}:
+            await self.conn.execute("ALTER TABLE vacations ADD COLUMN thread_id INTEGER")
         await self.conn.commit()
 
     async def close(self):
@@ -234,3 +243,4 @@ class Database:
 
     async def last_activity_for_cases(self, guild_id):
         return await self._all('''SELECT c.member_id,c.channel_id,c.created_at case_created_at,MAX(a.created_at) last_activity FROM personal_cases c LEFT JOIN activity_submissions a ON a.guild_id=c.guild_id AND a.member_id=c.member_id AND a.status='approved' WHERE c.guild_id=? AND c.status='active' GROUP BY c.member_id,c.channel_id,c.created_at''', (guild_id,))
+

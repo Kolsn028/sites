@@ -1,5 +1,6 @@
 from __future__ import annotations
-import os, re
+import os, re, asyncio
+from collections import defaultdict
 from datetime import date, datetime, timezone
 from aiohttp import web
 import discord
@@ -16,6 +17,7 @@ def safe_case_name(name,user_id):
 class ColomboBot(commands.Bot):
     def __init__(self,*args,db,**kwargs):
         super().__init__(*args,**kwargs); self.db=db; self.health_runner=None
+        self.operation_locks = defaultdict(asyncio.Lock)
 
     def now_iso(self): return datetime.now(timezone.utc).isoformat()
 
@@ -42,7 +44,9 @@ class ColomboBot(commands.Bot):
         if self.health_runner: await self.health_runner.cleanup()
         await self.db.close(); await super().close()
 
-    async def on_ready(self): print(f"✅ {self.user} online | guilds={len(self.guilds)}")
+    async def on_ready(self):
+        await self.change_presence(activity=discord.Game(name="Colombo • заявки и личные дела"))
+        print(f"✅ {self.user} online | guilds={len(self.guilds)}")
 
     async def is_recruiter(self,m):
         c=await self.db.get_config(m.guild.id); rid=c.get("recruiter_role_id")
@@ -60,6 +64,10 @@ class ColomboBot(commands.Bot):
         return {"capt":int(os.getenv("CAPT_POINTS","3")),"mp":int(os.getenv("MP_POINTS","2")),"msh":int(os.getenv("MSH_POINTS","2")),"training":int(os.getenv("TRAINING_POINTS","1")),"other":int(os.getenv("OTHER_POINTS","1"))}.get(cat,0)
 
     async def ensure_personal_case(self,member):
+        async with self.operation_locks[("case", member.guild.id, member.id)]:
+            return await self._ensure_personal_case(member)
+
+    async def _ensure_personal_case(self,member):
         ex=await self.db.get_case_by_member(member.guild.id,member.id)
         if ex:
             ch=member.guild.get_channel(ex["channel_id"])
@@ -77,6 +85,7 @@ class ColomboBot(commands.Bot):
         if msg.author.bot or not msg.guild or not msg.attachments: return
         case=await self.db.get_case_by_channel(msg.guild.id,msg.channel.id)
         if not case: return
+        if msg.author.id != case['member_id'] and not await self.is_high_staff(msg.author): return
         urls=[]
         for a in msg.attachments:
             ct=(a.content_type or "").lower()
