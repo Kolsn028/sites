@@ -1,0 +1,398 @@
+from __future__ import annotations
+
+import asyncio
+import os
+import re
+from datetime import date, timedelta
+
+import discord
+
+from .ui import base_embed, activity_type_label
+
+
+def _id_from_title(message: discord.Message | None, prefix: str) -> int | None:
+    if not message or not message.embeds:
+        return None
+    m = re.search(rf"{re.escape(prefix)}\s*#(\d+)", message.embeds[0].title or "")
+    return int(m.group(1)) if m else None
+
+
+def _thread_name(name: str, uid: int) -> str:
+    name = re.sub(r"[^0-9A-Za-zА-Яа-яЁё _.-]+", "", name).strip()
+    name = re.sub(r"\s+", "-", name)[:60] or str(uid)
+    return f"заявка-{name}"[:100]
+
+
+class ApplicationModal(discord.ui.Modal, title="Подать заявку"):
+    real_name_age = discord.ui.TextInput(label="Имя, возраст IRL и игровой ник", max_length=160)
+    majestic_experience = discord.ui.TextInput(label="Ваш опыт на Majestic", max_length=500)
+    shooting_skill = discord.ui.TextInput(label="Откат / уровень стрельбы", required=False, max_length=300)
+    level_online_tz = discord.ui.TextInput(label="LVL, онлайн и часовой пояс", max_length=200)
+    family_experience = discord.ui.TextInput(label="Опыт в семьях — где состояли?", style=discord.TextStyle.paragraph, max_length=900)
+
+    def __init__(self, bot):
+        super().__init__(timeout=300)
+        self.bot = bot
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not interaction.guild or not isinstance(interaction.user, discord.Member):
+            return
+        cfg = await self.bot.db.get_config(interaction.guild.id)
+        parent = interaction.guild.get_channel(cfg.get("applications_parent_channel_id") or 0)
+        log_ch = interaction.guild.get_channel(cfg.get("applications_log_channel_id") or 0)
+        recruiter_role = interaction.guild.get_role(cfg.get("recruiter_role_id") or 0)
+        if not isinstance(parent, discord.TextChannel) or not isinstance(log_ch, discord.TextChannel) or not recruiter_role:
+            return await interaction.response.send_message("⚠️ Система заявок не настроена. Выполните `/setup`.", ephemeral=True)
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        now = self.bot.now_iso()
+        app_id = await self.bot.db.create_application(
+            guild_id=interaction.guild.id,
+            applicant_id=interaction.user.id,
+            applicant_tag=str(interaction.user),
+            real_name_age=str(self.real_name_age),
+            majestic_experience=str(self.majestic_experience),
+            shooting_skill=str(self.shooting_skill) or "Не указано",
+            level_online_tz=str(self.level_online_tz),
+            family_experience=str(self.family_experience),
+            extra="",
+            status="pending",
+            created_at=now,
+            updated_at=now,
+        )
+
+        anchor = await parent.send(embed=base_embed(f"🆕 Новая заявка #{app_id}", f"Кандидат: {interaction.user.mention}"))
+        thread = await anchor.create_thread(
+            name=_thread_name(interaction.user.display_name, interaction.user.id),
+            type=discord.ChannelType.private_thread,
+            invitable=False,
+            auto_archive_duration=1440,
+            reason=f"Заявка #{app_id}",
+        )
+        try:
+            await thread.add_user(interaction.user)
+        except discord.DiscordException:
+            pass
+        for recruiter in recruiter_role.members:
+            if recruiter.bot:
+                continue
+            try:
+                await thread.add_user(recruiter)
+                await asyncio.sleep(0.03)
+            except discord.DiscordException:
+                pass
+
+        await self.bot.db.update_application(app_id, thread_id=thread.id)
+        e = base_embed(f"📋 Заявка #{app_id} • {interaction.user.display_name}", f"Кандидат: {interaction.user.mention}\nID: `{interaction.user.id}`")
+        e.set_thumbnail(url=interaction.user.display_avatar.url)
+        e.add_field(name="👤 Имя / возраст / ник", value=str(self.real_name_age)[:1024], inline=False)
+        e.add_field(name="🎮 Опыт Majestic", value=str(self.majestic_experience)[:1024], inline=False)
+        e.add_field(name="🎯 Стрельба / откат", value=(str(self.shooting_skill) or "Не указано")[:1024], inline=False)
+        e.add_field(name="📊 LVL / онлайн / часовой пояс", value=str(self.level_online_tz)[:1024], inline=False)
+        e.add_field(name="🏠 Опыт в семьях", value=str(self.family_experience)[:1024], inline=False)
+        e.add_field(name="Статус", value="🟡 На рассмотрении", inline=False)
+        await thread.send(content=f"{interaction.user.mention} <@&{recruiter_role.id}>", embed=e, view=RecruiterActionView(self.bot))
+
+        log = await log_ch.send(embed=base_embed(f"📥 Новая заявка #{app_id}", f"{interaction.user.mention}\nВетка: {thread.mention}"))
+        await self.bot.db.update_application(app_id, log_message_id=log.id)
+        await interaction.followup.send(f"✅ Заявка **#{app_id}** отправлена: {thread.mention}", ephemeral=True)
+
+
+class ApplicationPanelView(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    @discord.ui.button(label="Подать заявку", emoji="📝", style=discord.ButtonStyle.success, custom_id="colombo:application:open")
+    async def open_application(self, interaction: discord.Interaction, _button):
+        await interaction.response.send_modal(ApplicationModal(self.bot))
+
+
+class RecruiterActionSelect(discord.ui.Select):
+    def __init__(self, bot):
+        self.bot = bot
+        super().__init__(
+            placeholder="Действия рекрутера…",
+            min_values=1,
+            max_values=1,
+            custom_id="colombo:recruiter:action",
+            options=[
+                discord.SelectOption(label="Принять кандидата", value="accept", emoji="✅"),
+                discord.SelectOption(label="Вызвать на обзвон", value="interview", emoji="📞"),
+                discord.SelectOption(label="Отложить", value="hold", emoji="⏳"),
+                discord.SelectOption(label="Отказать", value="reject", emoji="❌"),
+            ],
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if not interaction.guild or not isinstance(interaction.user, discord.Member):
+            return
+        if not await self.bot.is_recruiter(interaction.user):
+            return await interaction.response.send_message("⛔ Только для рекрутеров.", ephemeral=True)
+        app = await self.bot.db.get_application_by_thread(interaction.guild.id, interaction.channel.id)
+        if not app:
+            return await interaction.response.send_message("Заявка не найдена.", ephemeral=True)
+
+        action = self.values[0]
+        cfg = await self.bot.db.get_config(interaction.guild.id)
+        applicant = interaction.guild.get_member(app["applicant_id"])
+
+        if action == "interview":
+            text_ch = interaction.guild.get_channel(cfg.get("interview_channel_id") or 0)
+            voice_ch = interaction.guild.get_channel(cfg.get("interview_voice_channel_id") or 0)
+            if not isinstance(text_ch, discord.TextChannel):
+                return await interaction.response.send_message("⚠️ Канал обзвона не настроен.", ephemeral=True)
+            await self.bot.db.update_application(app["id"], status="interview", handled_by=interaction.user.id, updated_at=self.bot.now_iso())
+            await text_ch.send(content=f"<@{app['applicant_id']}>", embed=base_embed(f"📞 Вызов на обзвон • заявка #{app['id']}", f"Кандидат: <@{app['applicant_id']}>\nРекрутер: {interaction.user.mention}\nГолосовой: {voice_ch.mention if voice_ch else 'не настроен'}", 0x5865F2))
+            if os.getenv("MOVE_TO_INTERVIEW_VOICE", "false").lower() == "true" and applicant and applicant.voice and isinstance(voice_ch, discord.VoiceChannel):
+                try:
+                    await applicant.move_to(voice_ch)
+                except discord.DiscordException:
+                    pass
+            return await interaction.response.send_message(f"📞 Вызов отправлен в {text_ch.mention}.", ephemeral=True)
+
+        if action == "hold":
+            await self.bot.db.update_application(app["id"], status="pending", handled_by=interaction.user.id, updated_at=self.bot.now_iso())
+            await interaction.response.send_message("⏳ Оставлено на рассмотрении.", ephemeral=True)
+            return
+
+        if app["status"] in ("accepted", "rejected"):
+            return await interaction.response.send_message("Эта заявка уже закрыта.", ephemeral=True)
+
+        accepted = action == "accept"
+        status = "accepted" if accepted else "rejected"
+        color = 0x3BAA72 if accepted else 0xD64045
+        title = "✅ Кандидат принят" if accepted else "❌ По заявке отказ"
+        await self.bot.db.bump_recruiter(interaction.guild.id, interaction.user.id, accepted=1 if accepted else 0, rejected=0 if accepted else 1)
+        await self.bot.db.update_application(app["id"], status=status, handled_by=interaction.user.id, updated_at=self.bot.now_iso())
+
+        if accepted and applicant:
+            role = interaction.guild.get_role(cfg.get("accepted_role_id") or 0)
+            if role:
+                try:
+                    await applicant.add_roles(role, reason=f"Заявка #{app['id']}")
+                except discord.DiscordException:
+                    pass
+
+        await interaction.response.send_message("✅ Решение сохранено.", ephemeral=True)
+        await interaction.channel.send(embed=base_embed(title, f"Рекрутер: {interaction.user.mention}\nКандидат: <@{app['applicant_id']}>", color))
+        await self.bot.send_or_update_leaderboard(interaction.guild)
+
+        if accepted and applicant and os.getenv("AUTO_CREATE_CASE_ON_ACCEPT", "true").lower() == "true":
+            case_ch = await self.bot.ensure_personal_case(applicant)
+            if case_ch:
+                await interaction.channel.send(f"📁 Личное дело: {case_ch.mention}")
+
+        await asyncio.sleep(5)
+        if isinstance(interaction.channel, discord.Thread):
+            try:
+                await interaction.channel.edit(archived=True, locked=True)
+            except discord.DiscordException:
+                pass
+
+
+class RecruiterActionView(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.add_item(RecruiterActionSelect(bot))
+
+
+class VacationModal(discord.ui.Modal, title="Заявка на отдых"):
+    reason = discord.ui.TextInput(label="Причина отдыха", style=discord.TextStyle.paragraph, max_length=700)
+    days = discord.ui.TextInput(label="На сколько дней?", placeholder="Напр.: 7", max_length=3)
+
+    def __init__(self, bot):
+        super().__init__(timeout=300)
+        self.bot = bot
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            days = int(str(self.days).strip())
+        except ValueError:
+            return await interaction.response.send_message("Укажи количество дней числом.", ephemeral=True)
+        if not 1 <= days <= 60:
+            return await interaction.response.send_message("Допустимо от 1 до 60 дней.", ephemeral=True)
+        if await self.bot.db.pending_vacation_for_member(interaction.guild.id, interaction.user.id):
+            return await interaction.response.send_message("У тебя уже есть активная заявка/отпуск.", ephemeral=True)
+        cfg = await self.bot.db.get_config(interaction.guild.id)
+        review_ch = interaction.guild.get_channel(cfg.get("vacation_review_channel_id") or 0)
+        if not isinstance(review_ch, discord.TextChannel):
+            return await interaction.response.send_message("Канал отпусков не настроен.", ephemeral=True)
+        start, end = date.today(), date.today() + timedelta(days=days)
+        vid = await self.bot.db.create_vacation(guild_id=interaction.guild.id, member_id=interaction.user.id, member_tag=str(interaction.user), reason=str(self.reason), start_date=start.isoformat(), end_date=end.isoformat(), status="pending", created_at=self.bot.now_iso(), updated_at=self.bot.now_iso())
+        e = base_embed(f"🌴 Заявка на отдых #{vid}", f"Участник: {interaction.user.mention}", 0xD5A43A)
+        e.add_field(name="Причина", value=str(self.reason)[:1024], inline=False)
+        e.add_field(name="Период", value=f"{start.strftime('%d.%m.%Y')} → {end.strftime('%d.%m.%Y')} ({days} дн.)", inline=False)
+        e.add_field(name="Статус", value="🟡 Ожидает решения", inline=False)
+        msg = await review_ch.send(embed=e, view=VacationDecisionView(self.bot))
+        await self.bot.db.update_vacation(vid, review_message_id=msg.id)
+        await interaction.response.send_message(f"✅ Заявка на отдых **#{vid}** отправлена.", ephemeral=True)
+
+
+class VacationPanelView(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    @discord.ui.button(label="Подать заявку на отдых", emoji="🌴", style=discord.ButtonStyle.primary, custom_id="colombo:vacation:open")
+    async def open_vacation(self, interaction, _button):
+        await interaction.response.send_modal(VacationModal(self.bot))
+
+
+class VacationDecisionView(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    async def _handle(self, interaction: discord.Interaction, approve: bool):
+        if not isinstance(interaction.user, discord.Member) or not await self.bot.can_review_vacation(interaction.user):
+            return await interaction.response.send_message("⛔ Недостаточно прав.", ephemeral=True)
+        vid = _id_from_title(interaction.message, "Заявка на отдых")
+        vac = await self.bot.db.get_vacation(vid) if vid else None
+        if not vac or vac["status"] != "pending":
+            return await interaction.response.send_message("Заявка уже обработана или не найдена.", ephemeral=True)
+        status = "approved" if approve else "rejected"
+        await self.bot.db.update_vacation(vac["id"], status=status, handled_by=interaction.user.id, updated_at=self.bot.now_iso())
+        member = interaction.guild.get_member(vac["member_id"])
+        if approve and member:
+            cfg = await self.bot.db.get_config(interaction.guild.id)
+            role = interaction.guild.get_role(cfg.get("vacation_role_id") or 0)
+            if role:
+                try:
+                    await member.add_roles(role)
+                except discord.DiscordException:
+                    pass
+        e = interaction.message.embeds[0].copy()
+        e.color = 0x3BAA72 if approve else 0xD64045
+        e.set_field_at(2, name="Статус", value=("✅ Одобрено" if approve else "❌ Отклонено") + f" • {interaction.user.mention}", inline=False)
+        await interaction.response.edit_message(embed=e, view=None)
+        await self.bot.update_vacation_status(interaction.guild)
+        await self.bot.update_inactivity_report(interaction.guild)
+
+    @discord.ui.button(label="Одобрить", emoji="✅", style=discord.ButtonStyle.success, custom_id="colombo:vacation:approve")
+    async def approve(self, interaction, _button):
+        await self._handle(interaction, True)
+
+    @discord.ui.button(label="Отклонить", emoji="❌", style=discord.ButtonStyle.danger, custom_id="colombo:vacation:reject")
+    async def reject(self, interaction, _button):
+        await self._handle(interaction, False)
+
+
+class CasePanelView(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    @discord.ui.button(label="Создать / открыть личное дело", emoji="📁", style=discord.ButtonStyle.primary, custom_id="colombo:case:open")
+    async def open_case(self, interaction, _button):
+        if not isinstance(interaction.user, discord.Member):
+            return
+        cfg = await self.bot.db.get_config(interaction.guild.id)
+        accepted = cfg.get("accepted_role_id")
+        if accepted and not interaction.user.guild_permissions.administrator and not interaction.user.get_role(accepted):
+            return await interaction.response.send_message("⛔ Личное дело доступно участникам семьи.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        ch = await self.bot.ensure_personal_case(interaction.user)
+        await interaction.followup.send(f"📁 Твоё личное дело: {ch.mention}" if ch else "⚠️ Не удалось создать дело. Проверь `/setup` и права бота.", ephemeral=True)
+
+
+class ActivityTypeSelect(discord.ui.Select):
+    def __init__(self, bot):
+        self.bot = bot
+        super().__init__(placeholder="Выбрать тип активности…", min_values=1, max_values=1, custom_id="colombo:activity:type", options=[
+            discord.SelectOption(label="Капт", value="capt", emoji="⚔️"),
+            discord.SelectOption(label="МП", value="mp", emoji="🎯"),
+            discord.SelectOption(label="МШ", value="msh", emoji="🛡️"),
+            discord.SelectOption(label="Тренировка", value="training", emoji="🏋️"),
+            discord.SelectOption(label="Другое", value="other", emoji="📌"),
+        ])
+
+    async def callback(self, interaction: discord.Interaction):
+        sid = _id_from_title(interaction.message, "Активность")
+        sub = await self.bot.db.get_activity(sid) if sid else None
+        if not sub:
+            return await interaction.response.send_message("Отчёт не найден.", ephemeral=True)
+        if interaction.user.id != sub["member_id"] and not await self.bot.is_high_staff(interaction.user):
+            return await interaction.response.send_message("⛔ Только владелец дела или High Staff.", ephemeral=True)
+        cat = self.values[0]
+        points = self.bot.activity_points(cat)
+        await self.bot.db.update_activity(sub["id"], category=cat, points=points, status="pending_review", updated_at=self.bot.now_iso())
+        e = interaction.message.embeds[0].copy()
+        e.color = 0x5865F2
+        e.set_field_at(0, name="Тип", value=activity_type_label(cat), inline=True)
+        e.set_field_at(1, name="Баллы", value=f"**{points}**", inline=True)
+        e.set_field_at(2, name="Статус", value="🔵 Ожидает проверки High Staff", inline=False)
+        await interaction.response.edit_message(embed=e, view=ActivityReviewView(self.bot))
+
+
+class ActivityClassifyView(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.add_item(ActivityTypeSelect(bot))
+
+
+class RejectActivityModal(discord.ui.Modal, title="Отклонить активность"):
+    reason = discord.ui.TextInput(label="Причина", style=discord.TextStyle.paragraph, max_length=500)
+
+    def __init__(self, bot, sid: int, message: discord.Message):
+        super().__init__(timeout=180)
+        self.bot, self.sid, self.message = bot, sid, message
+
+    async def on_submit(self, interaction: discord.Interaction):
+        sub = await self.bot.db.get_activity(self.sid)
+        if not sub or sub["status"] in ("approved", "rejected"):
+            return await interaction.response.send_message("Отчёт уже обработан.", ephemeral=True)
+        await self.bot.db.update_activity(sub["id"], status="rejected", note=str(self.reason), handled_by=interaction.user.id, updated_at=self.bot.now_iso())
+        e = self.message.embeds[0].copy()
+        e.color = 0xD64045
+        e.set_field_at(2, name="Статус", value=f"❌ Отклонено • {interaction.user.mention}\nПричина: {str(self.reason)[:500]}", inline=False)
+        await interaction.response.edit_message(embed=e, view=None)
+
+
+class ActivityReviewView(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    async def _sub(self, interaction):
+        if not isinstance(interaction.user, discord.Member) or not await self.bot.is_high_staff(interaction.user):
+            await interaction.response.send_message("⛔ Проверять активность может только High Staff.", ephemeral=True)
+            return None
+        sid = _id_from_title(interaction.message, "Активность")
+        return await self.bot.db.get_activity(sid) if sid else None
+
+    @discord.ui.button(label="Засчитать", emoji="✅", style=discord.ButtonStyle.success, custom_id="colombo:activity:approve")
+    async def approve(self, interaction, _button):
+        sub = await self._sub(interaction)
+        if not sub:
+            return
+        if sub["status"] in ("approved", "rejected"):
+            return await interaction.response.send_message("Отчёт уже обработан.", ephemeral=True)
+        await self.bot.db.update_activity(sub["id"], status="approved", handled_by=interaction.user.id, updated_at=self.bot.now_iso())
+        e = interaction.message.embeds[0].copy()
+        e.color = 0x3BAA72
+        e.set_field_at(2, name="Статус", value=f"✅ Засчитано • {interaction.user.mention}", inline=False)
+        await interaction.response.edit_message(embed=e, view=None)
+        await self.bot.update_inactivity_report(interaction.guild)
+
+    @discord.ui.button(label="Отклонить", emoji="❌", style=discord.ButtonStyle.danger, custom_id="colombo:activity:reject")
+    async def reject(self, interaction, _button):
+        sub = await self._sub(interaction)
+        if not sub:
+            return
+        await interaction.response.send_modal(RejectActivityModal(self.bot, sub["id"], interaction.message))
+
+    @discord.ui.button(label="Сменить тип", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="colombo:activity:reclassify")
+    async def reclassify(self, interaction, _button):
+        sub = await self._sub(interaction)
+        if not sub:
+            return
+        if sub["status"] in ("approved", "rejected"):
+            return await interaction.response.send_message("Обработанный отчёт менять нельзя.", ephemeral=True)
+        await self.bot.db.update_activity(sub["id"], category="unclassified", points=0, status="pending_classification", updated_at=self.bot.now_iso())
+        e = interaction.message.embeds[0].copy()
+        e.color = 0xD5A43A
+        e.set_field_at(0, name="Тип", value="❔ Не выбран", inline=True)
+        e.set_field_at(1, name="Баллы", value="—", inline=True)
+        e.set_field_at(2, name="Статус", value="🟡 Нужно выбрать тип", inline=False)
+        await interaction.response.edit_message(embed=e, view=ActivityClassifyView(self.bot))
