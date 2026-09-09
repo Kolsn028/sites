@@ -220,7 +220,8 @@ async def provision(bot, guild, selected):
         await main.edit(permissions=novice.permissions, colour=novice.colour,
                         reason='Colombo: main имеет права Novizio')
         if main.position <= novice.position:
-            await main.edit(position=novice.position + 1, reason='Colombo: main выше Novizio')
+            await guild.edit_role_positions(positions={main: novice.position, novice: main.position},
+                                            reason='Colombo: main выше Novizio в доступных позициях')
         for ch in guild.channels:
             if novice in ch.overwrites:
                 ow = dict(ch.overwrites)
