@@ -27,6 +27,18 @@ class Database:
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_progress_pending
             ON progress_requests(guild_id,member_id,kind) WHERE status='pending';
+        CREATE TABLE IF NOT EXISTS family_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL,
+            channel_id INTEGER NOT NULL, message_id INTEGER UNIQUE, creator_id INTEGER NOT NULL,
+            kind TEXT NOT NULL, title TEXT NOT NULL, starts_at INTEGER NOT NULL,
+            capacity INTEGER NOT NULL CHECK(capacity BETWEEN 1 AND 100), details TEXT,
+            status TEXT NOT NULL DEFAULT 'open'
+        );
+        CREATE TABLE IF NOT EXISTS event_signups (
+            event_id INTEGER NOT NULL REFERENCES family_events(id) ON DELETE CASCADE,
+            member_id INTEGER NOT NULL, joined_at TEXT NOT NULL, attended INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(event_id,member_id)
+        );
         PRAGMA journal_mode=WAL;
         PRAGMA synchronous=NORMAL;
         PRAGMA foreign_keys=ON;
@@ -160,6 +172,10 @@ class Database:
             "inactivity_report_channel_id": "INTEGER",
             "inactivity_report_message_id": "INTEGER",
         }
+        needed['events_category_id'] = 'INTEGER'
+        for kind in ('mcl','vzm','vzz','capt'):
+            needed[f'{kind}_panel_channel_id'] = 'INTEGER'
+            needed[f'{kind}_panel_message_id'] = 'INTEGER'
         for column, sql_type in needed.items():
             if column not in existing:
                 await self.conn.execute(f"ALTER TABLE guild_config ADD COLUMN {column} {sql_type}")

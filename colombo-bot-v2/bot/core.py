@@ -30,6 +30,8 @@ class ColomboBot(commands.Bot):
         from .progression import ContractPanelView, PromotionPanelView, ProgressReviewView
         for view in (ContractPanelView(self), PromotionPanelView(self), ProgressReviewView(self)):
             self.add_view(view)
+        from .events import EventPanelView, EventView
+        self.add_view(EventPanelView(self)); self.add_view(EventView(self))
         gid=int(os.getenv("GUILD_ID")) if os.getenv("GUILD_ID") else None
         try:
             if gid:
@@ -58,14 +60,14 @@ class ColomboBot(commands.Bot):
         from .provisioning import provision
         for guild in self.guilds:
             cfg = await self.db.get_config(guild.id)
-            if cfg.get('server_layout_version') == 6:
+            if cfg.get('server_layout_version') == 7:
                 continue
             if not all(any(r.name == name for r in guild.roles) for name in ('Leader', 'Recruit-', 'Colombo')):
                 continue
             try:
                 result = await provision(self, guild, {})
                 issues = [f.value for f in result.fields if f.name == 'Проверь']
-                print(f'Colombo layout v6 ready | guild={guild.id} | warnings={issues}')
+                print(f'Colombo layout v7 ready | guild={guild.id} | warnings={issues}')
             except Exception as exc:
                 print(f'Colombo layout migration incomplete: {type(exc).__name__}: {exc}')
 

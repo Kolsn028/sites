@@ -6,6 +6,7 @@ from .views import ApplicationPanelView, VacationPanelView, CasePanelView
 from .roles import ROLE_SPECS, named_role, HIGH_KEYS
 from .ui import application_banner_file
 from .legacy import migrate_legacy
+from .events import EVENTS, EventPanelView, event_panel
 from .progression import ContractPanelView, PromotionPanelView, contract_panel_embed, promotion_panel_embed
 
 async def provision(bot, guild, selected):
@@ -76,6 +77,7 @@ async def provision(bot, guild, selected):
         staff = [*leaders, recruiter]
         family = [roles['accepted_role_id'], *staff]
         specs = [
+            ('events_category_id', 'COLOMBO • ПЛЮСЫ МП', family, []),
             ('recruitment_category_id', 'COLOMBO • НАБОР', [guild.default_role], []),
             ('family_category_id', 'COLOMBO • СОСТАВ', family, []),
             ('management_category_id', 'COLOMBO • УПРАВЛЕНИЕ', staff, []),
@@ -141,11 +143,15 @@ async def provision(bot, guild, selected):
         await channel('contract_panel_channel_id', '🟠・активация-контрактов', 'family_category_id', family, staff)
         await channel('promotion_panel_channel_id', '😎・система-повышения', 'family_category_id', family, staff)
 
+        for kind, (emoji, name, color) in EVENTS.items():
+            await channel(f'{kind}_panel_channel_id', f'{emoji}・{name}', 'events_category_id', family)
+
         panels = [('application', application_panel_embed, ApplicationPanelView),
                   ('vacation', vacation_panel_embed, VacationPanelView),
                   ('case', case_panel_embed, CasePanelView),
                   ('contract', contract_panel_embed, ContractPanelView),
                   ('promotion', promotion_panel_embed, PromotionPanelView)]
+        panels += [(kind, lambda k=kind: event_panel(k), EventPanelView) for kind in EVENTS]
         cfg = await bot.db.get_config(guild.id)
         for kind, make_embed, view in panels:
             ch = channels[f'{kind}_panel_channel_id']
@@ -160,7 +166,7 @@ async def provision(bot, guild, selected):
                 except discord.NotFound:
                     pass
             if not message:
-                custom_id = f'colombo:{kind}:open'
+                custom_id = 'colombo:event:open' if kind in EVENTS else f'colombo:{kind}:open'
                 async for old in ch.history(limit=100):
                     if old.author.id == bot.user.id and any(getattr(child, 'custom_id', None) == custom_id
                         for row in old.components for child in getattr(row, 'children', [])):
@@ -213,5 +219,5 @@ async def provision(bot, guild, selected):
         result.add_field(name='Следующий шаг', value='Выдай роли нужным участникам. Чтобы использовать свои роли, повтори `/setup` и выбери их в параметрах. Права каналов, созданных ботом, обновляются автоматически. Права подключённых вручную каналов проверь отдельно.', inline=False)
         if warnings:
             result.add_field(name='Проверь', value='\n'.join(warnings)[:1024], inline=False)
-        await bot.db.set_config(guild.id, server_layout_version=6)
+        await bot.db.set_config(guild.id, server_layout_version=7)
         return result
