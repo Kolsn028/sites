@@ -149,6 +149,7 @@ class Database:
         cur = await self.conn.execute("PRAGMA table_info(guild_config)")
         existing = {row[1] for row in await cur.fetchall()}
         needed = {
+            "main_role_id": "INTEGER",
             "contract_panel_channel_id": "INTEGER",
             "contract_panel_message_id": "INTEGER",
             "promotion_panel_channel_id": "INTEGER",

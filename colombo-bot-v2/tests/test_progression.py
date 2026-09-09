@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from collections import defaultdict
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 from bot.database import Database
 from bot.legacy import merge_overwrite, migrate_legacy
@@ -27,7 +27,9 @@ class Progression(unittest.IsolatedAsyncioTestCase):
         modal=DecisionModal(self.bot,100,True);modal.reason._value='Проверил доказательства'
         await modal.on_submit(self.i);self.assertEqual((await self.row())['status'],'pending')
         modal.checklist._value='подтверждаю'
-        await asyncio.gather(modal.on_submit(self.i),modal.on_submit(self.i))
+        with patch('bot.progression.award_main',new=AsyncMock()) as award:
+            await asyncio.gather(modal.on_submit(self.i),modal.on_submit(self.i))
+            award.assert_awaited_once()
         self.assertEqual((await self.row())['status'],'approved');self.assertEqual(self.i.channel.send.await_count,1)
         await self.db.close();await self.db.connect();self.assertEqual((await self.row())['status'],'approved')
     async def test_cannot_approve_self_or_after_role_revoked(self):

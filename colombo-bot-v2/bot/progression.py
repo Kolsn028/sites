@@ -11,7 +11,19 @@ RULES = ('**1 → 3 ранг**\n'
          '• Пройденный обзвон у рекрутера и активность.\n\n'
          '**2 ранг пропускаем.** После 3 ранга — отдельные заявки и обзвоны.\n'
          'Прикрепи доказательства в приватной ветке. Руководство проверяет каждый пункт.\n'
-         'Подтверждение фиксирует игровой ранг; дополнительные роли Discord не создаются.')
+         'После одобрения бот заменит -Novizio- на main (3 ранг). Права останутся теми же.')
+
+
+async def award_main(bot, guild, member):
+    cfg = await bot.db.get_config(guild.id)
+    main = guild.get_role(cfg.get('main_role_id') or 0)
+    novice = guild.get_role(cfg.get('accepted_role_id') or 0)
+    if not main or not novice or main.managed or main >= guild.me.top_role or novice >= guild.me.top_role:
+        raise ValueError('Проверь /setup и подними роль бота выше main и -Novizio-. Повышение пока не подтверждено.')
+    # Add first so a failed removal never leaves the member without family access.
+    await member.add_roles(main, reason='Colombo: одобрено повышение до 3 ранга')
+    if member.get_role(novice.id):
+        await member.remove_roles(novice, reason='Colombo: Novizio заменена на main')
 
 
 def contract_panel_embed():
@@ -133,11 +145,13 @@ class DecisionModal(SafeModal, title='Решение по заявке'):
                         evidence = True; break
                 if not evidence:
                     return await i.followup.send('Автор ещё не прикрепил скриншот контракта в эту ветку.', ephemeral=True)
+            if self.accepted and row['kind'] == 'promotion':
+                await award_main(self.bot, i.guild, member)
             status = 'approved' if self.accepted else 'rejected'
             # Publish first; if Discord is unavailable keep the request actionable.
             await i.channel.send(embed=base_embed('✅ Подтверждено' if self.accepted else '❌ Отклонено',
                 f"Участник: <@{row['member_id']}>\nПроверил: {i.user.mention}\n{self.reason}"
-                + ('\n**Игровой ранг: 3.** Выдача ранга в игре выполняется руководством.' if self.accepted and row['kind']=='promotion' else ''),
+                + ('\n**3 ранг: main.** Роль -Novizio- заменена; права сохранены.' if self.accepted and row['kind']=='promotion' else ''),
                 0x3BAA72 if self.accepted else 0xD64045), allowed_mentions=discord.AllowedMentions.none())
             async with self.bot.db.lock:
                 await self.bot.db.conn.execute('UPDATE progress_requests SET status=?,handled_by=?,decision=? WHERE thread_id=?',

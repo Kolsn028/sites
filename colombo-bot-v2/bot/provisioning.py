@@ -27,7 +27,7 @@ async def provision(bot, guild, selected):
             role = selected.get(key) or (saved if cfg.get('role_schema_version') == 2 else None) or named_role(guild, key)
             if role and (role.is_default() or role.managed):
                 raise ValueError('Выбери обычные роли сервера, не @everyone и не роли интеграций.')
-            if role and key in ('accepted_role_id', 'colombo_role_id', 'vacation_role_id') and role >= me.top_role:
+            if role and key in ('main_role_id', 'accepted_role_id', 'colombo_role_id', 'vacation_role_id') and role >= me.top_role:
                 raise ValueError(f'Подними роль бота выше роли «{role.name}».')
             candidates[key] = role
         ids = [r.id for r in candidates.values() if r]
@@ -75,7 +75,7 @@ async def provision(bot, guild, selected):
         deputy = roles['dep_leader_role_id']
         leaders = [leader, deputy, high]
         staff = [*leaders, recruiter]
-        family = [roles['accepted_role_id'], *staff]
+        family = [roles['accepted_role_id'], roles['main_role_id'], *staff]
         specs = [
             ('events_category_id', 'COLOMBO • ПЛЮСЫ МП', family, []),
             ('recruitment_category_id', 'COLOMBO • НАБОР', [guild.default_role], []),
@@ -213,11 +213,22 @@ async def provision(bot, guild, selected):
                 except discord.Forbidden:
                     warnings.append('Не всем участникам удалось выдать Colombo: проверь права бота.')
                     break
+        # main is the next family rank, with exactly Novizio's permissions.
+        novice, main = roles['accepted_role_id'], roles['main_role_id']
+        await main.edit(permissions=novice.permissions, colour=novice.colour,
+                        reason='Colombo: main имеет права Novizio')
+        if main.position <= novice.position:
+            await main.edit(position=novice.position + 1, reason='Colombo: main выше Novizio')
+        for ch in guild.channels:
+            if novice in ch.overwrites:
+                ow = dict(ch.overwrites)
+                ow[main] = ch.overwrites_for(novice)
+                await ch.edit(overwrites=ow, reason='Colombo: равный доступ main и Novizio')
         result = base_embed('Сервер готов • Colombo', 'Разделы и панели настроены. Повторный запуск обновляет эту структуру.')
         result.add_field(name='Начало работы', value='\n'.join(channels[f'{kind}_panel_channel_id'].mention for kind in ('application', 'vacation', 'case')), inline=False)
         result.add_field(name='Роли', value='\n'.join(f'{name}: {roles[key].mention}' for key, (name, _) in ROLE_SPECS.items()), inline=False)
         result.add_field(name='Следующий шаг', value='Выдай роли нужным участникам. Чтобы использовать свои роли, повтори `/setup` и выбери их в параметрах. Права каналов, созданных ботом, обновляются автоматически. Права подключённых вручную каналов проверь отдельно.', inline=False)
         if warnings:
             result.add_field(name='Проверь', value='\n'.join(warnings)[:1024], inline=False)
-        await bot.db.set_config(guild.id, server_layout_version=7)
+        await bot.db.set_config(guild.id, server_layout_version=8)
         return result

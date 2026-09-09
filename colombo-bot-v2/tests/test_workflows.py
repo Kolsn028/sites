@@ -109,7 +109,7 @@ class Workflows(unittest.IsolatedAsyncioTestCase):
         initial=len(channels)
         await provision(bot,guild,{})
         self.assertEqual(len(channels),initial)
-        self.assertEqual(guild.create_role.await_count,7)
+        self.assertEqual(guild.create_role.await_count,8)
         self.assertEqual(len(messages),9)
         self.assertTrue(all(m.edit.await_count==1 for m in messages.values()))
         cfg=await self.db.get_config(1)

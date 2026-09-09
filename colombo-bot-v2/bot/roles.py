@@ -6,6 +6,7 @@ ROLE_SPECS = {
     'dep_leader_role_id': ('Deputy Leader', 0x2879E8),
     'high_staff_role_id': ('Ass.Deputy', 0xD5AD65),
     'recruiter_role_id': ('Recruit-', 0xA82D40),
+    'main_role_id': ('main', 0x8E98A6),
     'accepted_role_id': ('-Novizio-', 0x8E98A6),
     'colombo_role_id': ('Colombo', 0x777777),
     'vacation_role_id': ('Отдых', 0x5BAE96),
@@ -57,7 +58,7 @@ def may_review_vacation(member, cfg):
 
 
 def is_family(member, cfg):
-    return is_leader(member, cfg) or has_role(member, cfg, STAFF_KEYS + ('accepted_role_id',))
+    return is_leader(member, cfg) or has_role(member, cfg, STAFF_KEYS + ('accepted_role_id', 'main_role_id'))
 
 
 def assistant_mentions(guild, cfg):
