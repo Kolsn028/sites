@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from bot.roles import may_recruit, may_review_reports, is_family, notify_recruiters, named_role, STAFF_KEYS, configured_roles
+from bot.roles import may_recruit, may_review_reports, is_family, notify_recruiters, named_role, STAFF_KEYS, configured_roles, may_promote, may_review_vacation, may_manage_recruiters
 from bot.ui import application_banner_file, application_panel_embed
 
 CFG = dict(leader_role_id=1, dep_leader_role_id=2, high_staff_role_id=3,
@@ -14,15 +14,16 @@ def member(rank_ids, admin=False, uid=10, guild=None):
 
 class RolePolicy(unittest.IsolatedAsyncioTestCase):
     def test_hierarchy_access_matrix(self):
-        expected = [(1,True,True,True), (2,True,False,True), (3,True,True,True),
-                    (4,True,False,True), (5,False,False,True), (6,False,False,False)]
-        for rank,recruit,reports,family in expected:
-            m=member([rank])
-            self.assertEqual(bool(may_recruit(m,CFG)),recruit)
-            self.assertEqual(bool(may_review_reports(m,CFG)),reports)
-            self.assertEqual(bool(is_family(m,CFG)),family)
-        self.assertFalse(may_review_reports(member([2,3,4],admin=True),CFG))
-        self.assertTrue(may_review_reports(member([1,2,3]),CFG))
+        for rank in range(1,7):
+            m=member([rank],admin=True)
+            self.assertEqual(bool(may_recruit(m,CFG)),rank==4)
+            self.assertEqual(bool(may_review_reports(m,CFG)),rank in (2,3,4))
+            self.assertEqual(bool(may_promote(m,CFG)),rank==3)
+            self.assertEqual(bool(may_review_vacation(m,CFG)),rank in (2,3))
+            self.assertEqual(bool(may_manage_recruiters(m,CFG)),rank in (2,3))
+            self.assertEqual(bool(is_family(m,CFG)),rank!=6)
+        self.assertFalse(may_recruit(member([],admin=True,uid=999),CFG))
+        self.assertTrue(may_recruit(member([2,4]),CFG))
 
     async def test_recruit_notifications_exclude_leader_and_deputy_with_recruit_role(self):
         people=[member([4],uid=10),member([1,4],uid=11),member([2,4],uid=12)]

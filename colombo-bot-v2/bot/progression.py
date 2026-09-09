@@ -1,7 +1,7 @@
 """Private contract and promotion workflows. Evidence is checked by staff."""
 import discord
 from .interactions import SafeView, SafeModal, private_thread, serialized
-from .roles import configured_roles, HIGH_KEYS
+from .roles import configured_roles, HIGH_KEYS, STAFF_KEYS
 from .ui import base_embed
 
 RULES = ('**1 → 3 ранг**\n'
@@ -17,7 +17,7 @@ RULES = ('**1 → 3 ранг**\n'
 def contract_panel_embed():
     return base_embed('🟠 Активация контрактов',
         'Нажми **Оформить контракт**, укажи название и выбери: активация или помощь.\n'
-        'Прикрепи скриншот в своей приватной ветке. **Ass.Deputy / Leader** проверит отчёт.\n'
+        'Прикрепи скриншот в своей приватной ветке. **Recruit- / Ass.Deputy / Deputy Leader** проверит отчёт.\n'
         'Для повышения учитывается помощь, а не просто активация.', 0xE58A35)
 
 
@@ -37,7 +37,7 @@ async def submit(bot, i, kind, details):
         existing = await bot.db._one('SELECT * FROM progress_requests WHERE guild_id=? AND member_id=? AND kind=? AND status=\'pending\'', (i.guild_id, i.user.id, kind))
         if existing:
             return await i.followup.send(f"У тебя уже есть открытая ветка: <#{existing['thread_id']}>.", ephemeral=True)
-        thread = await private_thread(parent, i.user, configured_roles(i.guild, cfg, HIGH_KEYS),
+        thread = await private_thread(parent, i.user, configured_roles(i.guild, cfg, STAFF_KEYS if kind == 'contract' else HIGH_KEYS),
                                       f'{"контракт" if kind == "contract" else "повышение"}-{i.user.display_name}')
         try:
             async with bot.db.lock:
@@ -46,7 +46,7 @@ async def submit(bot, i, kind, details):
                 await bot.db.conn.commit()
             embed = base_embed('🟡 Проверка контракта' if kind == 'contract' else '🟡 Заявка на повышение',
                 f'Участник: {i.user.mention}\n{details}\n\n**Прикрепи скриншоты в эту ветку.**\n'
-                'Проверяющий: Ass.Deputy / Leader. Самостоятельное одобрение запрещено.')
+                + ('Проверяют: Recruit-, Ass.Deputy, Deputy Leader. ' if kind == 'contract' else 'Проверяет: Ass.Deputy. ') + 'Самостоятельное одобрение запрещено.')
             if kind == 'promotion':
                 embed.add_field(name='Что проверяет руководство', value='10 помощей • 10 разных каптов • 10 дней в семье • обзвон • активность', inline=False)
             await thread.send(embed=embed, view=ProgressReviewView(bot), allowed_mentions=discord.AllowedMentions.none())
@@ -107,13 +107,16 @@ class DecisionModal(SafeModal, title='Решение по заявке'):
     def __init__(self, bot, thread_id, accepted):
         super().__init__(); self.bot=bot; self.thread_id=thread_id; self.accepted=accepted
     async def on_submit(self, i):
-        if not isinstance(i.user, discord.Member) or not await self.bot.is_high_staff(i.user):
-            return await i.response.send_message('Только Ass.Deputy / Leader. Deputy Leader отчёты не проверяет.', ephemeral=True)
+        if not isinstance(i.user, discord.Member):
+            return await i.response.send_message('Доступно только на сервере.', ephemeral=True)
         await i.response.defer(ephemeral=True, thinking=True)
         async with self.bot.operation_locks[('progress_decision', i.guild_id, self.thread_id)]:
             row = await self.bot.db._one('SELECT * FROM progress_requests WHERE guild_id=? AND thread_id=?', (i.guild_id, self.thread_id))
             if not row or row['status'] != 'pending':
                 return await i.followup.send('Заявка уже закрыта или не найдена.', ephemeral=True)
+            allowed = await self.bot.can_promote(i.user) if row['kind'] == 'promotion' else await self.bot.is_high_staff(i.user)
+            if not allowed:
+                return await i.followup.send('Повышения проверяет Ass.Deputy; контракты — Recruit-, Ass.Deputy, Deputy Leader.', ephemeral=True)
             if row['member_id'] == i.user.id:
                 return await i.followup.send('Свою заявку проверять нельзя.', ephemeral=True)
             member = i.guild.get_member(row['member_id'])
@@ -146,8 +149,12 @@ class ProgressReviewView(SafeView):
     def __init__(self, bot):
         super().__init__(timeout=None); self.bot=bot
     async def decide(self, i, accepted):
-        if not isinstance(i.user, discord.Member) or not await self.bot.is_high_staff(i.user):
-            return await i.response.send_message('Только Ass.Deputy / Leader.', ephemeral=True)
+        row = await self.bot.db._one('SELECT kind FROM progress_requests WHERE guild_id=? AND thread_id=?', (i.guild_id, i.channel_id))
+        if not row or not isinstance(i.user, discord.Member):
+            return await i.response.send_message('Заявка не найдена.', ephemeral=True)
+        allowed = await self.bot.can_promote(i.user) if row['kind'] == 'promotion' else await self.bot.is_high_staff(i.user)
+        if not allowed:
+            return await i.response.send_message('Нет роли, ответственной за это направление.', ephemeral=True)
         await i.response.send_modal(DecisionModal(self.bot, i.channel_id, accepted))
     @discord.ui.button(label='Подтвердить', style=discord.ButtonStyle.success, custom_id='colombo:progress:approve')
     async def approve(self, i, _): await self.decide(i, True)

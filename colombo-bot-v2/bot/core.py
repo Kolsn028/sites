@@ -6,7 +6,7 @@ from aiohttp import web
 import discord
 from discord.ext import commands, tasks
 from .ui import base_embed
-from .roles import has_role, is_leader, is_family, may_recruit, may_review_reports, configured_roles, HIGH_KEYS
+from .roles import has_role, is_leader, is_family, may_recruit, may_review_reports, configured_roles, HIGH_KEYS, STAFF_KEYS, may_promote, may_review_vacation, may_manage_recruiters
 
 MEDIA_EXTS=(".png",".jpg",".jpeg",".webp",".gif",".mp4",".mov")
 
@@ -58,14 +58,14 @@ class ColomboBot(commands.Bot):
         from .provisioning import provision
         for guild in self.guilds:
             cfg = await self.db.get_config(guild.id)
-            if cfg.get('server_layout_version') == 4:
+            if cfg.get('server_layout_version') == 5:
                 continue
             if not all(any(r.name == name for r in guild.roles) for name in ('Leader', 'Recruit-', 'Colombo')):
                 continue
             try:
                 result = await provision(self, guild, {})
                 issues = [f.value for f in result.fields if f.name == 'Проверь']
-                print(f'Colombo layout v4 ready | guild={guild.id} | warnings={issues}')
+                print(f'Colombo layout v5 ready | guild={guild.id} | warnings={issues}')
             except Exception as exc:
                 print(f'Colombo layout migration incomplete: {type(exc).__name__}: {exc}')
 
@@ -95,7 +95,13 @@ class ColomboBot(commands.Bot):
 
     async def can_review_vacation(self, member):
         cfg = await self.db.get_config(member.guild.id)
-        return is_leader(member, cfg) or has_role(member, cfg, HIGH_KEYS) or member.guild_permissions.administrator
+        return may_review_vacation(member, cfg)
+
+    async def can_promote(self, member):
+        return may_promote(member, await self.db.get_config(member.guild.id))
+
+    async def can_assign_recruiter(self, member):
+        return may_manage_recruiters(member, await self.db.get_config(member.guild.id))
 
     def activity_points(self,cat):
         return {"capt":int(os.getenv("CAPT_POINTS","3")),"mp":int(os.getenv("MP_POINTS","2")),"msh":int(os.getenv("MSH_POINTS","2")),"training":int(os.getenv("TRAINING_POINTS","1")),"other":int(os.getenv("OTHER_POINTS","1"))}.get(cat,0)
@@ -112,12 +118,12 @@ class ColomboBot(commands.Bot):
         c=await self.db.get_config(member.guild.id); cat=member.guild.get_channel(c.get("case_category_id") or 0); high=member.guild.get_role(c.get("high_staff_role_id") or 0)
         if not isinstance(cat,discord.CategoryChannel) or not high: return None
         ow={member.guild.default_role:discord.PermissionOverwrite(view_channel=False),member:discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True,attach_files=True,embed_links=True),high:discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True,attach_files=True,embed_links=True,manage_messages=True)}
-        for staff in configured_roles(member.guild, c, HIGH_KEYS):
+        for staff in configured_roles(member.guild, c, STAFF_KEYS):
             ow[staff] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, attach_files=True, embed_links=True)
         if member.guild.me: ow[member.guild.me]=discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True,manage_channels=True,manage_messages=True,attach_files=True,embed_links=True)
         ch=await member.guild.create_text_channel(name=safe_case_name(member.display_name,member.id),category=cat,overwrites=ow,topic=f"Личное дело • owner={member.id}",reason=f"Личное дело {member}")
         await self.db.create_case(member.guild.id,member.id,ch.id,self.now_iso())
-        e=base_embed(f"📁 Личное дело • {member.display_name}",f"Владелец: {member.mention}\n\n1. Отправь сюда скрин/видео.\n2. Выбери тип активности.\n3. Ass.Deputy или Leader нажмёт **Засчитать** или **Отклонить**.\n\nВ статистику идут только подтверждённые отчёты.",0x6E56CF); e.set_thumbnail(url=member.display_avatar.url)
+        e=base_embed(f"📁 Личное дело • {member.display_name}",f"Владелец: {member.mention}\n\n1. Отправь сюда скрин/видео.\n2. Выбери тип активности.\n3. Recruit-, Ass.Deputy или Deputy Leader нажмёт **Засчитать** или **Отклонить**.\n\nВ статистику идут только подтверждённые отчёты.",0x6E56CF); e.set_thumbnail(url=member.display_avatar.url)
         await ch.send(content=None,embed=e); return ch
 
     async def on_message(self,msg):

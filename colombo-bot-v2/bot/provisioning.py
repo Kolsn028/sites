@@ -79,7 +79,7 @@ async def provision(bot, guild, selected):
             ('recruitment_category_id', 'COLOMBO • НАБОР', [guild.default_role], []),
             ('family_category_id', 'COLOMBO • СОСТАВ', family, []),
             ('management_category_id', 'COLOMBO • УПРАВЛЕНИЕ', staff, []),
-            ('case_category_id', 'COLOMBO • ЛИЧНЫЕ ДЕЛА', leaders, leaders),
+            ('case_category_id', 'COLOMBO • ЛИЧНЫЕ ДЕЛА', staff, staff),
         ]
         cats = {}
         for key, name, audience, reviewers in specs:
@@ -135,10 +135,10 @@ async def provision(bot, guild, selected):
         await channel('vacation_status_channel_id', '🗓・кто-в-отдыхе', 'family_category_id', family)
         await channel('leaderboard_channel_id', '🏆・рейтинг-рекрутеров', 'management_category_id', staff)
         await channel('applications_log_channel_id', '📥・журнал-заявок', 'management_category_id', staff)
-        await channel('activity_log_channel_id', '📊・журнал-активности', 'management_category_id', leaders)
-        await channel('inactivity_report_channel_id', '📉・контроль-неактива', 'management_category_id', leaders)
+        await channel('activity_log_channel_id', '📊・журнал-активности', 'management_category_id', staff)
+        await channel('inactivity_report_channel_id', '📉・контроль-неактива', 'management_category_id', staff)
 
-        await channel('contract_panel_channel_id', '🟠・активация-контрактов', 'family_category_id', family, leaders)
+        await channel('contract_panel_channel_id', '🟠・активация-контрактов', 'family_category_id', family, staff)
         await channel('promotion_panel_channel_id', '😎・система-повышения', 'family_category_id', family, leaders)
 
         panels = [('application', application_panel_embed, ApplicationPanelView),
@@ -187,11 +187,18 @@ async def provision(bot, guild, selected):
             if not raw_id.isdigit():
                 continue
             owner = guild.get_member(int(raw_id))
-            ow = overwrites(leaders, write=True)
+            ow = overwrites(staff, write=True)
             if owner:
                 ow[owner] = discord.PermissionOverwrite(view_channel=True, send_messages=True,
                     read_message_history=True, attach_files=True, embed_links=True)
             await case.edit(overwrites=ow, reason='Colombo: доступ руководства к личному делу')
+        # Existing open contract threads also need the newly authorized recruiters.
+        contract_parent = channels['contract_panel_channel_id']
+        for thread in guild.threads:
+            if thread.parent_id == contract_parent.id:
+                for member in recruiter.members:
+                    if not member.bot:
+                        await thread.add_user(member)
         base_role = roles['colombo_role_id']
         for member in guild.members:
             if not member.bot and not member.get_role(base_role.id):
@@ -206,5 +213,5 @@ async def provision(bot, guild, selected):
         result.add_field(name='Следующий шаг', value='Выдай роли нужным участникам. Чтобы использовать свои роли, повтори `/setup` и выбери их в параметрах. Права каналов, созданных ботом, обновляются автоматически. Права подключённых вручную каналов проверь отдельно.', inline=False)
         if warnings:
             result.add_field(name='Проверь', value='\n'.join(warnings)[:1024], inline=False)
-        await bot.db.set_config(guild.id, server_layout_version=4)
+        await bot.db.set_config(guild.id, server_layout_version=5)
         return result

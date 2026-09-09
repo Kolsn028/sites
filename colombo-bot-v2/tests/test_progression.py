@@ -14,7 +14,7 @@ class Progression(unittest.IsolatedAsyncioTestCase):
         self.tmp=tempfile.TemporaryDirectory(); self.db=Database(self.tmp.name+'/test.db'); await self.db.connect()
         await self.db.conn.execute("INSERT INTO progress_requests(guild_id,member_id,kind,thread_id,details,created_at) VALUES (1,10,'promotion',100,'proofs','2026-09-09')")
         await self.db.conn.commit()
-        self.bot=SimpleNamespace(db=self.db,operation_locks=defaultdict(asyncio.Lock),is_high_staff=AsyncMock(return_value=True),is_family_member=AsyncMock(return_value=True))
+        self.bot=SimpleNamespace(db=self.db,operation_locks=defaultdict(asyncio.Lock),can_promote=AsyncMock(return_value=True),is_high_staff=AsyncMock(return_value=True),is_family_member=AsyncMock(return_value=True))
         self.i=MagicMock(spec=discord.Interaction);self.i.guild_id=1
         self.i.user=MagicMock(spec=discord.Member);self.i.user.id=20;self.i.user.mention='<@20>'
         self.i.guild=MagicMock(spec=discord.Guild)
@@ -34,7 +34,7 @@ class Progression(unittest.IsolatedAsyncioTestCase):
         modal=DecisionModal(self.bot,100,True);modal.checklist._value='подтверждаю'
         self.i.user.id=10;await modal.on_submit(self.i)
         self.assertEqual((await self.row())['status'],'pending')
-        self.i.user.id=20;self.bot.is_high_staff.return_value=False;await modal.on_submit(self.i)
+        self.i.user.id=20;self.bot.can_promote.return_value=False;await modal.on_submit(self.i)
         self.assertEqual((await self.row())['status'],'pending');self.i.channel.send.assert_not_awaited()
     async def test_contract_requires_authors_image(self):
         await self.db.conn.execute("UPDATE progress_requests SET kind='contract'");await self.db.conn.commit()

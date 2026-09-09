@@ -139,8 +139,8 @@ class RecruiterActionSelect(discord.ui.Select):
             await interaction.response.send_message("Сначала нажми «Взять заявку».", ephemeral=True)
             await interaction.message.edit(view=RecruiterActionView(self.bot))
             return
-        if app['assigned_to'] != interaction.user.id and not await self.bot.can_manage(interaction.user):
-            return await interaction.response.send_message(f"Заявка закреплена за <@{app['assigned_to']}>. Решение принимает ответственный рекрутер или Leader.", ephemeral=True)
+        if app['assigned_to'] != interaction.user.id:
+            return await interaction.response.send_message(f"Заявка закреплена за <@{app['assigned_to']}>. Решение принимает ответственный рекрутер.", ephemeral=True)
         await interaction.response.defer(ephemeral=True, thinking=True)
         action = self.values[0]
         cfg = await self.bot.db.get_config(interaction.guild.id)
@@ -248,8 +248,8 @@ class RecruiterActionView(SafeView):
         app = await self.bot.db.get_application_by_thread(interaction.guild.id, interaction.channel.id)
         if not app or app['status'] not in ('pending', 'interview'):
             return await interaction.followup.send("Заявка уже закрыта или не найдена.", ephemeral=True)
-        if app.get('assigned_to') != interaction.user.id and not await self.bot.can_manage(interaction.user):
-            return await interaction.followup.send("Освободить заявку может ответственный рекрутер или Leader.", ephemeral=True)
+        if app.get('assigned_to') != interaction.user.id:
+            return await interaction.followup.send("Освободить заявку может ответственный рекрутер.", ephemeral=True)
         await self.bot.db.release_application(app['id'], self.bot.now_iso())
         await update_assignment_card(interaction.message, None)
         await interaction.followup.send("Заявка свободна. Резерв голосового канала снят.", ephemeral=True)
@@ -395,7 +395,7 @@ class ActivityTypeSelect(discord.ui.Select):
         if not sub:
             return await interaction.response.send_message("Отчёт не найден.", ephemeral=True)
         if interaction.user.id != sub["member_id"] and not await self.bot.is_high_staff(interaction.user):
-            return await interaction.response.send_message("⛔ Только владелец дела или Ass.Deputy / Leader.", ephemeral=True)
+            return await interaction.response.send_message("⛔ Только владелец дела или Recruit- / Ass.Deputy / Deputy Leader.", ephemeral=True)
         if sub["status"] != "pending_classification":
             return await interaction.response.send_message("Тип уже выбран или отчёт обработан.", ephemeral=True)
         cat = self.values[0]
@@ -405,7 +405,7 @@ class ActivityTypeSelect(discord.ui.Select):
         e.color = 0x5865F2
         e.set_field_at(0, name="Тип", value=activity_type_label(cat), inline=True)
         e.set_field_at(1, name="Баллы", value=f"**{points}**", inline=True)
-        e.set_field_at(2, name="Статус", value="🔵 Ожидает проверки Ass.Deputy / Leader", inline=False)
+        e.set_field_at(2, name="Статус", value="🔵 Ожидает проверки Recruit- / Ass.Deputy / Deputy Leader", inline=False)
         await interaction.response.edit_message(embed=e, view=ActivityReviewView(self.bot))
 
 
@@ -424,7 +424,7 @@ class RejectActivityModal(SafeModal, title="Отклонить активнос�
 
     async def on_submit(self, interaction: discord.Interaction):
         if not isinstance(interaction.user, discord.Member) or not await self.bot.is_high_staff(interaction.user):
-            return await interaction.response.send_message("Отчёты проверяют Ass.Deputy и Leader.", ephemeral=True)
+            return await interaction.response.send_message("Отчёты проверяют Recruit-, Ass.Deputy и Deputy Leader.", ephemeral=True)
         sub = await self.bot.db.get_activity(self.sid)
         if not sub or sub["status"] in ("approved", "rejected"):
             return await interaction.response.send_message("Отчёт уже обработан.", ephemeral=True)
@@ -442,7 +442,7 @@ class ActivityReviewView(SafeView):
 
     async def _sub(self, interaction):
         if not isinstance(interaction.user, discord.Member) or not await self.bot.is_high_staff(interaction.user):
-            await interaction.response.send_message("⛔ Проверять активность может только Ass.Deputy / Leader.", ephemeral=True)
+            await interaction.response.send_message("⛔ Проверять активность может только Recruit- / Ass.Deputy / Deputy Leader.", ephemeral=True)
             return None
         sid = _id_from_title(interaction.message, "Активность")
         return await self.bot.db.get_activity(sid) if sid else None

@@ -17,7 +17,7 @@ def register_commands(bot):
     @app_commands.guild_only()
     @admin_only()
     @app_commands.describe(leader="Leader — красный, полное управление без упоминаний",
-        deputy="Deputy Leader — синий, без проверки отчётов", ass_deputy="Ass.Deputy — проверка отчётов",
+        deputy="Deputy Leader — отчёты, отдых, назначение рекрутов", ass_deputy="Ass.Deputy — отчёты, повышения, отдых, рекруты",
         recruit="Recruit- — заявки и приём", novizio="-Novizio- — роль после приёма",
         colombo="Colombo — роль всем вошедшим", vacation="Служебная роль на период отдыха")
     async def setup(i: discord.Interaction, leader: discord.Role | None = None,
@@ -57,7 +57,7 @@ def register_commands(bot):
     @bot.tree.command(name="case_create",description="Создать/открыть личное дело участника")
     async def case_create(i:discord.Interaction,member:discord.Member):
         if not isinstance(i.user,discord.Member): return
-        if i.user.id!=member.id and not await bot.is_high_staff(i.user): return await i.response.send_message("⛔ Чужое дело может создавать только High Staff.",ephemeral=True)
+        if i.user.id!=member.id and not await bot.is_high_staff(i.user): return await i.response.send_message("⛔ Чужое дело может создавать Recruit-, Ass.Deputy или Deputy Leader.",ephemeral=True)
         cfg = await bot.db.get_config(i.guild.id)
         accepted = cfg.get("accepted_role_id")
         if not await bot.is_family_member(member) and not await bot.can_manage(i.user):
@@ -79,7 +79,7 @@ def register_commands(bot):
 
     @bot.tree.command(name="inactive",description="Показать участников без активности")
     async def inactive(i:discord.Interaction,days:app_commands.Range[int,1,60]=3):
-        if not isinstance(i.user,discord.Member) or not await bot.is_high_staff(i.user): return await i.response.send_message("⛔ Только High Staff.",ephemeral=True)
+        if not isinstance(i.user,discord.Member) or not await bot.is_high_staff(i.user): return await i.response.send_message("⛔ Только Recruit-, Ass.Deputy или Deputy Leader.",ephemeral=True)
         rows=await bot.inactive_members(i.guild,days); lines=[f"⚠️ {m.mention} — **{d} дн.**" for m,d,_ in rows[:30]]; await i.response.send_message(embed=base_embed(f"📉 Неактив • {days}+ дней",'\n'.join(lines) if lines else '✅ Таких участников нет.',0xD64045 if lines else 0x3BAA72),ephemeral=True)
 
     @bot.tree.command(name="leaderboard",description="Лидерборд рекрутеров")
@@ -108,6 +108,20 @@ def register_commands(bot):
         for name,key in [('Ветки заявок','applications_parent_channel_id'),('Лог заявок','applications_log_channel_id'),('Обзвон','interview_channel_id'),('Отпуска','vacation_review_channel_id'),('Статус отпусков','vacation_status_channel_id'),('Лидерборд','leaderboard_channel_id'),('Лог активности','activity_log_channel_id'),('Контроль неактива','inactivity_report_channel_id')]: lines.append(f"**{name}:** {f'<#{c.get(key)}>' if c.get(key) else '—'}")
         for name,key in [('Recruit-','recruiter_role_id'),('-Novizio-','accepted_role_id'),('Leader','leader_role_id'),('Deputy Leader','dep_leader_role_id'),('Ass.Deputy','high_staff_role_id'),('Colombo','colombo_role_id'),('В отпуске','vacation_role_id')]: lines.append(f"**{name}:** {f'<@&{c.get(key)}>' if c.get(key) else '—'}")
         cat=i.guild.get_channel(c.get('case_category_id') or 0); lines.append(f"**Категория дел:** {cat.name if cat else '—'}"); await i.response.send_message(embed=base_embed("⚙️ Конфигурация",'\n'.join(lines)),ephemeral=True)
+
+    @bot.tree.command(name="recruiter_assign", description="Назначить Recruit-: Ass.Deputy или Deputy Leader")
+    async def recruiter_assign(i: discord.Interaction, member: discord.Member):
+        if not isinstance(i.user, discord.Member) or not await bot.can_assign_recruiter(i.user):
+            return await i.response.send_message("Назначают только Ass.Deputy и Deputy Leader.", ephemeral=True)
+        if member.bot:
+            return await i.response.send_message("Выбери участника, а не бота.", ephemeral=True)
+        await i.response.defer(ephemeral=True)
+        cfg = await bot.db.get_config(i.guild_id)
+        role = i.guild.get_role(cfg.get('recruiter_role_id') or 0)
+        if not role or role.managed or role >= i.guild.me.top_role:
+            return await i.followup.send("Проверь роль Recruit- и положение роли бота.", ephemeral=True)
+        await member.add_roles(role, reason=f"Colombo: назначение рекрута участником {i.user.id}")
+        await i.followup.send(f"Роль Recruit- выдана {member.mention}.", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
     for command in bot.tree.get_commands():
         command.guild_only = True

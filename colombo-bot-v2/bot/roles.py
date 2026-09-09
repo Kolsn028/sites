@@ -12,7 +12,9 @@ ROLE_SPECS = {
 }
 STAFF_KEYS = ('leader_role_id', 'dep_leader_role_id', 'high_staff_role_id', 'recruiter_role_id')
 HIGH_KEYS = STAFF_KEYS[:3]
-REPORT_KEYS = ('leader_role_id', 'high_staff_role_id')
+REPORT_KEYS = ('recruiter_role_id', 'high_staff_role_id', 'dep_leader_role_id')
+PROMOTION_KEYS = ('high_staff_role_id',)
+MANAGEMENT_KEYS = ('high_staff_role_id', 'dep_leader_role_id')
 
 
 def named_role(guild, key):
@@ -35,20 +37,27 @@ def is_leader(member, cfg):
 
 
 def may_recruit(member, cfg):
-    return is_leader(member, cfg) or has_role(member, cfg, STAFF_KEYS) or member.guild_permissions.administrator
+    return bool(has_role(member, cfg, ('recruiter_role_id',)))
 
 
 def may_review_reports(member, cfg):
-    if is_leader(member, cfg):
-        return True
-    # Deputy is deliberately excluded, even if carrying a junior role or Administrator.
-    if has_role(member, cfg, ('dep_leader_role_id',)):
-        return False
-    return has_role(member, cfg, ('high_staff_role_id',)) or member.guild_permissions.administrator
+    return bool(has_role(member, cfg, REPORT_KEYS))
+
+
+def may_promote(member, cfg):
+    return bool(has_role(member, cfg, PROMOTION_KEYS))
+
+
+def may_manage_recruiters(member, cfg):
+    return bool(has_role(member, cfg, MANAGEMENT_KEYS))
+
+
+def may_review_vacation(member, cfg):
+    return bool(has_role(member, cfg, MANAGEMENT_KEYS))
 
 
 def is_family(member, cfg):
-    return may_recruit(member, cfg) or has_role(member, cfg, ('accepted_role_id',))
+    return is_leader(member, cfg) or has_role(member, cfg, STAFF_KEYS + ('accepted_role_id',))
 
 
 async def notify_recruiters(channel, guild, cfg, embed):
