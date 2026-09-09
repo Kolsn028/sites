@@ -16,6 +16,6 @@ intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 
-bot = ColomboBot(command_prefix="!", intents=intents, db=Database(os.getenv("DATABASE_PATH", "data/bot.db")), allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True))
+bot = ColomboBot(command_prefix="!", intents=intents, db=Database(os.getenv("DATABASE_PATH", "data/bot.db")), allowed_mentions=discord.AllowedMentions.none())
 register_commands(bot)
 bot.run(TOKEN)

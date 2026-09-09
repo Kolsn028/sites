@@ -6,6 +6,7 @@ from aiohttp import web
 import discord
 from discord.ext import commands, tasks
 from .ui import base_embed
+from .roles import has_role, is_leader, is_family, may_recruit, may_review_reports, configured_roles, HIGH_KEYS
 
 MEDIA_EXTS=(".png",".jpg",".jpeg",".webp",".gif",".mp4",".mov")
 
@@ -48,17 +49,33 @@ class ColomboBot(commands.Bot):
         await self.change_presence(activity=discord.Game(name="Colombo • заявки и личные дела"))
         print(f"✅ {self.user} online | guilds={len(self.guilds)}")
 
-    async def is_recruiter(self,m):
-        c=await self.db.get_config(m.guild.id); rid=c.get("recruiter_role_id")
-        return bool(m.guild_permissions.administrator or (rid and m.get_role(rid)))
+    async def on_member_join(self, member):
+        if member.bot:
+            return
+        cfg = await self.db.get_config(member.guild.id)
+        role = member.guild.get_role(cfg.get("colombo_role_id") or 0)
+        if role:
+            try:
+                await member.add_roles(role, reason="Colombo: вход на сервер")
+            except discord.Forbidden:
+                print("Colombo autorole: проверь Manage Roles и положение роли бота")
 
-    async def is_high_staff(self,m):
-        c=await self.db.get_config(m.guild.id); rid=c.get("high_staff_role_id")
-        return bool(m.guild_permissions.administrator or (rid and m.get_role(rid)))
+    async def can_manage(self, member):
+        cfg = await self.db.get_config(member.guild.id)
+        return is_leader(member, cfg) or member.guild_permissions.administrator
 
-    async def can_review_vacation(self,m):
-        c=await self.db.get_config(m.guild.id); ids={c.get("assistant_leader_role_id"),c.get("dep_leader_role_id")}
-        return m.guild_permissions.administrator or any(r and m.get_role(r) for r in ids)
+    async def is_recruiter(self, member):
+        return may_recruit(member, await self.db.get_config(member.guild.id))
+
+    async def is_high_staff(self, member):
+        return may_review_reports(member, await self.db.get_config(member.guild.id))
+
+    async def is_family_member(self, member):
+        return is_family(member, await self.db.get_config(member.guild.id))
+
+    async def can_review_vacation(self, member):
+        cfg = await self.db.get_config(member.guild.id)
+        return is_leader(member, cfg) or has_role(member, cfg, HIGH_KEYS) or member.guild_permissions.administrator
 
     def activity_points(self,cat):
         return {"capt":int(os.getenv("CAPT_POINTS","3")),"mp":int(os.getenv("MP_POINTS","2")),"msh":int(os.getenv("MSH_POINTS","2")),"training":int(os.getenv("TRAINING_POINTS","1")),"other":int(os.getenv("OTHER_POINTS","1"))}.get(cat,0)
@@ -75,11 +92,13 @@ class ColomboBot(commands.Bot):
         c=await self.db.get_config(member.guild.id); cat=member.guild.get_channel(c.get("case_category_id") or 0); high=member.guild.get_role(c.get("high_staff_role_id") or 0)
         if not isinstance(cat,discord.CategoryChannel) or not high: return None
         ow={member.guild.default_role:discord.PermissionOverwrite(view_channel=False),member:discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True,attach_files=True,embed_links=True),high:discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True,attach_files=True,embed_links=True,manage_messages=True)}
+        for staff in configured_roles(member.guild, c, HIGH_KEYS):
+            ow[staff] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, attach_files=True, embed_links=True)
         if member.guild.me: ow[member.guild.me]=discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True,manage_channels=True,manage_messages=True,attach_files=True,embed_links=True)
         ch=await member.guild.create_text_channel(name=safe_case_name(member.display_name,member.id),category=cat,overwrites=ow,topic=f"Личное дело • owner={member.id}",reason=f"Личное дело {member}")
         await self.db.create_case(member.guild.id,member.id,ch.id,self.now_iso())
-        e=base_embed(f"📁 Личное дело • {member.display_name}",f"Владелец: {member.mention}\n\n1. Отправь сюда скрин/видео.\n2. Выбери тип активности.\n3. High Staff нажмёт **Засчитать** или **Отклонить**.\n\nВ статистику идут только подтверждённые отчёты.",0x6E56CF); e.set_thumbnail(url=member.display_avatar.url)
-        await ch.send(content=f"{member.mention} {high.mention}",embed=e); return ch
+        e=base_embed(f"📁 Личное дело • {member.display_name}",f"Владелец: {member.mention}\n\n1. Отправь сюда скрин/видео.\n2. Выбери тип активности.\n3. Ass.Deputy или Leader нажмёт **Засчитать** или **Отклонить**.\n\nВ статистику идут только подтверждённые отчёты.",0x6E56CF); e.set_thumbnail(url=member.display_avatar.url)
+        await ch.send(content=None,embed=e); return ch
 
     async def on_message(self,msg):
         if msg.author.bot or not msg.guild or not msg.attachments: return

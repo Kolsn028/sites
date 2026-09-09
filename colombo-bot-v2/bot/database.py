@@ -131,6 +131,9 @@ class Database:
         needed = {
             "case_panel_channel_id": "INTEGER",
             "recruitment_category_id": "INTEGER",
+            "leader_role_id": "INTEGER",
+            "role_schema_version": "INTEGER",
+            "colombo_role_id": "INTEGER",
             "family_category_id": "INTEGER",
             "management_category_id": "INTEGER",
             "application_panel_message_id": "INTEGER",

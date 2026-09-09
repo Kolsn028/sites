@@ -2,61 +2,47 @@ from __future__ import annotations
 from datetime import datetime
 import discord
 from discord import app_commands
-from .ui import application_panel_embed,vacation_panel_embed,case_panel_embed,base_embed,activity_type_label
+from .ui import application_panel_embed,vacation_panel_embed,case_panel_embed,base_embed,activity_type_label,application_banner_file
 from .views import ApplicationPanelView,VacationPanelView,CasePanelView
 
 
 def admin_only():
     async def pred(i):
-        if isinstance(i.user,discord.Member) and i.user.guild_permissions.administrator: return True
+        if isinstance(i.user,discord.Member) and await i.client.can_manage(i.user): return True
         raise app_commands.CheckFailure
     return app_commands.check(pred)
 
 
 def register_commands(bot):
-    @bot.tree.command(name="setup_auto", description="Создать каналы, роли и панели Colombo автоматически")
     @app_commands.guild_only()
-    @app_commands.default_permissions(administrator=True)
     @admin_only()
-    async def setup_auto(i: discord.Interaction, recruiter: discord.Role | None = None,
-                         high_staff: discord.Role | None = None, family: discord.Role | None = None,
-                         assistant: discord.Role | None = None, deputy: discord.Role | None = None,
-                         vacation: discord.Role | None = None):
+    @app_commands.describe(leader="Leader — красный, полное управление без упоминаний",
+        deputy="Deputy Leader — синий, без проверки отчётов", ass_deputy="Ass.Deputy — проверка отчётов",
+        recruit="Recruit- — заявки и приём", novizio="-Novizio- — роль после приёма",
+        colombo="Colombo — роль всем вошедшим", vacation="Служебная роль на период отдыха")
+    async def setup(i: discord.Interaction, leader: discord.Role | None = None,
+                    deputy: discord.Role | None = None, ass_deputy: discord.Role | None = None,
+                    recruit: discord.Role | None = None, novizio: discord.Role | None = None,
+                    colombo: discord.Role | None = None, vacation: discord.Role | None = None):
         await i.response.defer(ephemeral=True, thinking=True)
         from .provisioning import provision
         try:
-            embed = await provision(bot, i.guild, dict(recruiter_role_id=recruiter,
-                high_staff_role_id=high_staff, accepted_role_id=family,
-                assistant_leader_role_id=assistant, dep_leader_role_id=deputy, vacation_role_id=vacation))
-            await i.followup.send(embed=embed, ephemeral=True)
+            embed = await provision(bot, i.guild, dict(leader_role_id=leader, dep_leader_role_id=deputy,
+                high_staff_role_id=ass_deputy, recruiter_role_id=recruit, accepted_role_id=novizio,
+                colombo_role_id=colombo, vacation_role_id=vacation))
+            await i.followup.send(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
         except ValueError as exc:
             await i.followup.send(str(exc), ephemeral=True)
         except discord.Forbidden:
-            await i.followup.send("Не хватает прав в одном из каналов. Проверь права и положение роли бота; затем повтори `/setup_auto`. Уже созданные разделы сохранятся.", ephemeral=True)
+            await i.followup.send("Проверь права бота и положение его роли. Затем повтори /setup — готовые каналы сохранятся.", ephemeral=True)
 
-
-    @bot.tree.command(name="setup",description="Полная настройка Colombo Bot")
-    @admin_only()
-    async def setup(i:discord.Interaction,
-        applications_parent:discord.TextChannel, applications_log:discord.TextChannel,
-        recruiter_role:discord.Role, interview_text:discord.TextChannel, interview_voice:discord.VoiceChannel,
-        accepted_role:discord.Role, vacation_review:discord.TextChannel, vacation_status:discord.TextChannel,
-        assistant_leader_role:discord.Role, dep_leader_role:discord.Role, vacation_role:discord.Role,
-        leaderboard_channel:discord.TextChannel, case_category:discord.CategoryChannel,
-        high_staff_role:discord.Role, activity_log:discord.TextChannel, inactivity_report:discord.TextChannel):
-        await bot.db.set_config(i.guild.id,
-            applications_parent_channel_id=applications_parent.id, applications_log_channel_id=applications_log.id,
-            recruiter_role_id=recruiter_role.id, interview_channel_id=interview_text.id, interview_voice_channel_id=interview_voice.id,
-            accepted_role_id=accepted_role.id, vacation_review_channel_id=vacation_review.id, vacation_status_channel_id=vacation_status.id,
-            assistant_leader_role_id=assistant_leader_role.id, dep_leader_role_id=dep_leader_role.id, vacation_role_id=vacation_role.id,
-            leaderboard_channel_id=leaderboard_channel.id, case_category_id=case_category.id, high_staff_role_id=high_staff_role.id,
-            activity_log_channel_id=activity_log.id, inactivity_report_channel_id=inactivity_report.id)
-        await i.response.send_message(embed=base_embed("✅ Система настроена",f"Заявки: {applications_parent.mention} → {applications_log.mention}\nРекрутеры: {recruiter_role.mention}\nОбзвон: {interview_text.mention} / {interview_voice.mention}\nОтпуска: {vacation_review.mention} → {vacation_status.mention}\nЛичные дела: **{case_category.name}**\nHigh Staff: {high_staff_role.mention}\nЛог активности: {activity_log.mention}\nКонтроль неактива: {inactivity_report.mention}",0x3BAA72),ephemeral=True)
+    bot.tree.command(name="setup", description="Роли Colombo, каналы и панели")(setup)
+    bot.tree.command(name="setup_auto", description="Автоматическая настройка ролей и каналов Colombo")(setup)
 
     @bot.tree.command(name="panel_application",description="Отправить панель подачи заявки")
     @admin_only()
     async def panel_application(i:discord.Interaction,channel:discord.TextChannel):
-        m=await channel.send(embed=application_panel_embed(),view=ApplicationPanelView(bot)); await bot.db.set_config(i.guild.id,application_panel_channel_id=channel.id,application_panel_message_id=m.id); await i.response.send_message(f"✅ {m.jump_url}",ephemeral=True)
+        await i.response.defer(ephemeral=True); m=await channel.send(embed=application_panel_embed(),view=ApplicationPanelView(bot),file=application_banner_file(),allowed_mentions=discord.AllowedMentions.none()); await bot.db.set_config(i.guild.id,application_panel_channel_id=channel.id,application_panel_message_id=m.id); await i.followup.send(f"✅ {m.jump_url}",ephemeral=True)
 
     @bot.tree.command(name="panel_vacation",description="Отправить панель отдыха")
     @admin_only()
@@ -74,7 +60,7 @@ def register_commands(bot):
         if i.user.id!=member.id and not await bot.is_high_staff(i.user): return await i.response.send_message("⛔ Чужое дело может создавать только High Staff.",ephemeral=True)
         cfg = await bot.db.get_config(i.guild.id)
         accepted = cfg.get("accepted_role_id")
-        if accepted and not member.get_role(accepted) and not i.user.guild_permissions.administrator:
+        if not await bot.is_family_member(member) and not await bot.can_manage(i.user):
             return await i.response.send_message("Личное дело доступно участникам семьи.", ephemeral=True)
         await i.response.defer(ephemeral=True,thinking=True); ch=await bot.ensure_personal_case(member)
         await i.followup.send(f"📁 Личное дело: {ch.mention}" if ch else "⚠️ Проверь `/setup` и права Manage Channels.",ephemeral=True)
@@ -120,7 +106,7 @@ def register_commands(bot):
     async def config_show(i):
         c=await bot.db.get_config(i.guild.id); lines=[]
         for name,key in [('Ветки заявок','applications_parent_channel_id'),('Лог заявок','applications_log_channel_id'),('Обзвон','interview_channel_id'),('Отпуска','vacation_review_channel_id'),('Статус отпусков','vacation_status_channel_id'),('Лидерборд','leaderboard_channel_id'),('Лог активности','activity_log_channel_id'),('Контроль неактива','inactivity_report_channel_id')]: lines.append(f"**{name}:** {f'<#{c.get(key)}>' if c.get(key) else '—'}")
-        for name,key in [('Рекрутеры','recruiter_role_id'),('Принятые','accepted_role_id'),('High Staff','high_staff_role_id'),('Assistant GP Leader','assistant_leader_role_id'),('Dep Leader','dep_leader_role_id'),('В отпуске','vacation_role_id')]: lines.append(f"**{name}:** {f'<@&{c.get(key)}>' if c.get(key) else '—'}")
+        for name,key in [('Recruit-','recruiter_role_id'),('-Novizio-','accepted_role_id'),('Leader','leader_role_id'),('Deputy Leader','dep_leader_role_id'),('Ass.Deputy','high_staff_role_id'),('Colombo','colombo_role_id'),('В отпуске','vacation_role_id')]: lines.append(f"**{name}:** {f'<@&{c.get(key)}>' if c.get(key) else '—'}")
         cat=i.guild.get_channel(c.get('case_category_id') or 0); lines.append(f"**Категория дел:** {cat.name if cat else '—'}"); await i.response.send_message(embed=base_embed("⚙️ Конфигурация",'\n'.join(lines)),ephemeral=True)
 
     for command in bot.tree.get_commands():
@@ -128,7 +114,7 @@ def register_commands(bot):
 
     @bot.tree.error
     async def on_error(i,error):
-        print('App command error:',repr(error)); text='⛔ Нужны права администратора.' if isinstance(error,app_commands.CheckFailure) else '⚠️ Произошла ошибка. Проверь права и `/setup`.'
+        print('App command error:',repr(error)); text='⛔ Нужна роль Leader или права администратора.' if isinstance(error,app_commands.CheckFailure) else '⚠️ Произошла ошибка. Проверь права и `/setup`.'
         try:
             if i.response.is_done(): await i.followup.send(text,ephemeral=True)
             else: await i.response.send_message(text,ephemeral=True)
