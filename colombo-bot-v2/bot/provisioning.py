@@ -5,6 +5,8 @@ from .views import ApplicationPanelView, VacationPanelView, CasePanelView
 
 from .roles import ROLE_SPECS, named_role, HIGH_KEYS
 from .ui import application_banner_file
+from .legacy import migrate_legacy
+from .progression import ContractPanelView, PromotionPanelView, contract_panel_embed, promotion_panel_embed
 
 async def provision(bot, guild, selected):
     async with bot.operation_locks[('setup', guild.id)]:
@@ -43,6 +45,7 @@ async def provision(bot, guild, selected):
             roles[key] = role
             await bot.db.set_config(guild.id, **{key: role.id})
         await bot.db.set_config(guild.id, role_schema_version=2)
+        warnings.extend(await migrate_legacy(guild, roles))
         ranked = [roles[k] for k in ROLE_SPECS if k != 'vacation_role_id']
         if all(r < me.top_role for r in ranked):
             positions = sorted([r.position for r in ranked], reverse=True)
@@ -135,9 +138,14 @@ async def provision(bot, guild, selected):
         await channel('activity_log_channel_id', '📊・журнал-активности', 'management_category_id', leaders)
         await channel('inactivity_report_channel_id', '📉・контроль-неактива', 'management_category_id', leaders)
 
+        await channel('contract_panel_channel_id', '🟠・активация-контрактов', 'family_category_id', family, leaders)
+        await channel('promotion_panel_channel_id', '😎・система-повышения', 'family_category_id', family, leaders)
+
         panels = [('application', application_panel_embed, ApplicationPanelView),
                   ('vacation', vacation_panel_embed, VacationPanelView),
-                  ('case', case_panel_embed, CasePanelView)]
+                  ('case', case_panel_embed, CasePanelView),
+                  ('contract', contract_panel_embed, ContractPanelView),
+                  ('promotion', promotion_panel_embed, PromotionPanelView)]
         cfg = await bot.db.get_config(guild.id)
         for kind, make_embed, view in panels:
             ch = channels[f'{kind}_panel_channel_id']
@@ -152,7 +160,7 @@ async def provision(bot, guild, selected):
                 except discord.NotFound:
                     pass
             if not message:
-                custom_id = {'application':'colombo:application:open', 'vacation':'colombo:vacation:open', 'case':'colombo:case:open'}[kind]
+                custom_id = f'colombo:{kind}:open'
                 async for old in ch.history(limit=100):
                     if old.author.id == bot.user.id and any(getattr(child, 'custom_id', None) == custom_id
                         for row in old.components for child in getattr(row, 'children', [])):
@@ -198,4 +206,5 @@ async def provision(bot, guild, selected):
         result.add_field(name='Следующий шаг', value='Выдай роли нужным участникам. Чтобы использовать свои роли, повтори `/setup` и выбери их в параметрах. Права каналов, созданных ботом, обновляются автоматически. Права подключённых вручную каналов проверь отдельно.', inline=False)
         if warnings:
             result.add_field(name='Проверь', value='\n'.join(warnings)[:1024], inline=False)
+        await bot.db.set_config(guild.id, server_layout_version=3)
         return result

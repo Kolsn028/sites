@@ -27,6 +27,9 @@ class ColomboBot(commands.Bot):
         from .views import ApplicationPanelView,RecruiterActionView,VacationPanelView,VacationDecisionView,CasePanelView,ActivityClassifyView,ActivityReviewView
         for view in (ApplicationPanelView(self),RecruiterActionView(self),VacationPanelView(self),VacationDecisionView(self),CasePanelView(self),ActivityClassifyView(self),ActivityReviewView(self)):
             self.add_view(view)
+        from .progression import ContractPanelView, PromotionPanelView, ProgressReviewView
+        for view in (ContractPanelView(self), PromotionPanelView(self), ProgressReviewView(self)):
+            self.add_view(view)
         gid=int(os.getenv("GUILD_ID")) if os.getenv("GUILD_ID") else None
         try:
             if gid:
@@ -48,6 +51,23 @@ class ColomboBot(commands.Bot):
     async def on_ready(self):
         await self.change_presence(activity=discord.Game(name="Colombo • заявки и личные дела"))
         print(f"✅ {self.user} online | guilds={len(self.guilds)}")
+        if getattr(self, '_layout_attempted', False):
+            return
+        self._layout_attempted = True
+        # Apply the explicitly requested migration only to the existing Colombo server.
+        from .provisioning import provision
+        for guild in self.guilds:
+            cfg = await self.db.get_config(guild.id)
+            if cfg.get('server_layout_version') == 3:
+                continue
+            if not all(any(r.name == name for r in guild.roles) for name in ('Leader', 'Recruit-', 'Colombo')):
+                continue
+            try:
+                result = await provision(self, guild, {})
+                issues = [f.value for f in result.fields if f.name == 'Проверь']
+                print(f'Colombo layout v3 ready | guild={guild.id} | warnings={issues}')
+            except Exception as exc:
+                print(f'Colombo layout migration incomplete: {type(exc).__name__}: {exc}')
 
     async def on_member_join(self, member):
         if member.bot:

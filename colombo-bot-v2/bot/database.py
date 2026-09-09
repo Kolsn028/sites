@@ -19,6 +19,14 @@ class Database:
         self.conn = await aiosqlite.connect(self.path)
         self.conn.row_factory = aiosqlite.Row
         await self.conn.executescript('''
+        CREATE TABLE IF NOT EXISTS progress_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER NOT NULL, member_id INTEGER NOT NULL, kind TEXT NOT NULL,
+            thread_id INTEGER NOT NULL UNIQUE, details TEXT NOT NULL, created_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending', handled_by INTEGER, decision TEXT
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_progress_pending
+            ON progress_requests(guild_id,member_id,kind) WHERE status='pending';
         PRAGMA journal_mode=WAL;
         PRAGMA synchronous=NORMAL;
         PRAGMA foreign_keys=ON;
@@ -129,6 +137,11 @@ class Database:
         cur = await self.conn.execute("PRAGMA table_info(guild_config)")
         existing = {row[1] for row in await cur.fetchall()}
         needed = {
+            "contract_panel_channel_id": "INTEGER",
+            "contract_panel_message_id": "INTEGER",
+            "promotion_panel_channel_id": "INTEGER",
+            "promotion_panel_message_id": "INTEGER",
+            "server_layout_version": "INTEGER",
             "case_panel_channel_id": "INTEGER",
             "interview_voice_2_id": "INTEGER",
             "interview_voice_3_id": "INTEGER",
