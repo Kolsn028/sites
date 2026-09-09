@@ -130,6 +130,8 @@ class Database:
         existing = {row[1] for row in await cur.fetchall()}
         needed = {
             "case_panel_channel_id": "INTEGER",
+            "interview_voice_2_id": "INTEGER",
+            "interview_voice_3_id": "INTEGER",
             "recruitment_category_id": "INTEGER",
             "leader_role_id": "INTEGER",
             "role_schema_version": "INTEGER",
@@ -151,6 +153,11 @@ class Database:
         cur = await self.conn.execute("PRAGMA table_info(vacations)")
         if "thread_id" not in {row[1] for row in await cur.fetchall()}:
             await self.conn.execute("ALTER TABLE vacations ADD COLUMN thread_id INTEGER")
+        cur = await self.conn.execute("PRAGMA table_info(applications)")
+        columns = {row[1] for row in await cur.fetchall()}
+        for column, sql_type in {"assigned_to": "INTEGER", "interview_room_id": "INTEGER", "interview_until": "TEXT"}.items():
+            if column not in columns:
+                await self.conn.execute(f"ALTER TABLE applications ADD COLUMN {column} {sql_type}")
         await self.conn.commit()
 
     async def close(self):
@@ -247,3 +254,34 @@ class Database:
     async def last_activity_for_cases(self, guild_id):
         return await self._all('''SELECT c.member_id,c.channel_id,c.created_at case_created_at,MAX(a.created_at) last_activity FROM personal_cases c LEFT JOIN activity_submissions a ON a.guild_id=c.guild_id AND a.member_id=c.member_id AND a.status='approved' WHERE c.guild_id=? AND c.status='active' GROUP BY c.member_id,c.channel_id,c.created_at''', (guild_id,))
 
+
+    async def claim_application(self, app_id, recruiter_id, now):
+        async with self.lock:
+            cur = await self.conn.execute("UPDATE applications SET assigned_to=?,updated_at=? WHERE id=? AND status IN ('pending','interview') AND assigned_to IS NULL", (recruiter_id,now,app_id))
+            await self.conn.commit()
+            return cur.rowcount == 1
+
+    async def release_application(self, app_id, now):
+        async with self.lock:
+            await self.conn.execute("UPDATE applications SET assigned_to=NULL,interview_room_id=NULL,interview_until=NULL,status='pending',updated_at=? WHERE id=? AND status IN ('pending','interview')", (now,app_id))
+            await self.conn.commit()
+
+    async def reserve_interview(self, app_id, guild_id, available_ids, now, until):
+        # Atomic allocation across all applications; empty channels can already be reserved.
+        async with self.lock:
+            app = await self._one("SELECT * FROM applications WHERE id=? AND guild_id=? AND status IN ('pending','interview')", (app_id,guild_id))
+            if not app or not app['assigned_to']:
+                return None
+            rows = await self._all("SELECT interview_room_id FROM applications WHERE guild_id=? AND id<>? AND status='interview' AND interview_until>?", (guild_id,app_id,now))
+            taken = {row['interview_room_id'] for row in rows}
+            room = next((rid for rid in available_ids if rid not in taken), None)
+            if room is None:
+                return None
+            await self.conn.execute("UPDATE applications SET interview_room_id=?,interview_until=?,status='interview',updated_at=? WHERE id=?", (room,until,now,app_id))
+            await self.conn.commit()
+            return room
+
+    async def clear_interview(self, app_id, now):
+        async with self.lock:
+            await self.conn.execute("UPDATE applications SET interview_room_id=NULL,interview_until=NULL,status='pending',updated_at=? WHERE id=? AND status='interview'", (now,app_id))
+            await self.conn.commit()

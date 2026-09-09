@@ -8,6 +8,7 @@ from datetime import date, timedelta
 import discord
 
 from .ui import base_embed, activity_type_label
+from .recruiting import update_assignment_card, interview_room
 from .roles import configured_roles, STAFF_KEYS, HIGH_KEYS, notify_recruiters
 from .interactions import SafeModal, SafeView, serialized, private_thread
 
@@ -83,6 +84,7 @@ class ApplicationModal(SafeModal, title="Подать заявку"):
         e.add_field(name="📊 LVL / онлайн / часовой пояс", value=str(self.level_online_tz)[:1024], inline=False)
         e.add_field(name="🏠 Опыт в семьях", value=str(self.family_experience)[:1024], inline=False)
         e.add_field(name="Статус", value="🟡 На рассмотрении", inline=False)
+        e.add_field(name="Ответственный", value="Свободна — нажми «Взять заявку»", inline=False)
         try:
             await thread.send(content=None, embed=e, view=RecruiterActionView(self.bot))
         except Exception:
@@ -133,6 +135,12 @@ class RecruiterActionSelect(discord.ui.Select):
 
         if app["status"] in ("accepted", "rejected"):
             return await interaction.response.send_message("Эта заявка уже закрыта.", ephemeral=True)
+        if not app.get("assigned_to"):
+            await interaction.response.send_message("Сначала нажми «Взять заявку».", ephemeral=True)
+            await interaction.message.edit(view=RecruiterActionView(self.bot))
+            return
+        if app['assigned_to'] != interaction.user.id and not await self.bot.can_manage(interaction.user):
+            return await interaction.response.send_message(f"Заявка закреплена за <@{app['assigned_to']}>. Решение принимает ответственный рекрутер или Leader.", ephemeral=True)
         await interaction.response.defer(ephemeral=True, thinking=True)
         action = self.values[0]
         cfg = await self.bot.db.get_config(interaction.guild.id)
@@ -140,11 +148,16 @@ class RecruiterActionSelect(discord.ui.Select):
 
         if action == "interview":
             text_ch = interaction.guild.get_channel(cfg.get("interview_channel_id") or 0)
-            voice_ch = interaction.guild.get_channel(cfg.get("interview_voice_channel_id") or 0)
             if not isinstance(text_ch, discord.TextChannel):
                 return await interaction.followup.send("⚠️ Канал обзвона не настроен.", ephemeral=True)
-            await self.bot.db.update_application(app["id"], status="interview", handled_by=interaction.user.id, updated_at=self.bot.now_iso())
-            await text_ch.send(content=f"<@{app['applicant_id']}>", embed=base_embed(f"📞 Вызов на обзвон • заявка #{app['id']}", f"Кандидат: <@{app['applicant_id']}>\nРекрутер: {interaction.user.mention}\nГолосовой: {voice_ch.mention if voice_ch else 'не настроен'}", 0x5865F2))
+            voice_ch = await interview_room(self.bot, interaction.guild, cfg, app)
+            if not voice_ch:
+                return await interaction.followup.send("Все каналы обзвона заняты, зарезервированы или недоступны кандидату. Повтори вызов позже; для создания трёх каналов используй /setup.", ephemeral=True)
+            try:
+                await text_ch.send(embed=base_embed(f"📞 Вызов на обзвон • заявка #{app['id']}", f"Кандидат: <@{app['applicant_id']}>\nОтветственный: <@{app['assigned_to']}>\nГолосовой: {voice_ch.mention}\nКанал зарезервирован на 15 минут.", 0x5865F2), allowed_mentions=discord.AllowedMentions.none())
+            except discord.DiscordException:
+                await self.bot.db.clear_interview(app['id'], self.bot.now_iso())
+                raise
             if os.getenv("MOVE_TO_INTERVIEW_VOICE", "false").lower() == "true" and applicant and applicant.voice and isinstance(voice_ch, discord.VoiceChannel):
                 try:
                     await applicant.move_to(voice_ch)
@@ -155,10 +168,10 @@ class RecruiterActionSelect(discord.ui.Select):
                     await applicant.send(embed=base_embed("Приглашение на обзвон • Colombo", f"Твоя заявка принята на следующий этап.\nКанал беседы: {voice_ch.mention if voice_ch else text_ch.mention}\nВетка: {interaction.channel.jump_url}"))
                 except discord.Forbidden:
                     pass
-            return await interaction.followup.send(f"📞 Вызов отправлен в {text_ch.mention}.", ephemeral=True)
+            return await interaction.followup.send(f"📞 Вызов отправлен. Канал: {voice_ch.mention}, резерв — 15 минут.", ephemeral=True)
 
         if action == "hold":
-            await self.bot.db.update_application(app["id"], status="pending", handled_by=interaction.user.id, updated_at=self.bot.now_iso())
+            await self.bot.db.update_application(app["id"], status="pending", interview_room_id=None, interview_until=None, handled_by=interaction.user.id, updated_at=self.bot.now_iso())
             await interaction.followup.send("⏳ Оставлено на рассмотрении.", ephemeral=True)
             return
 
@@ -180,7 +193,7 @@ class RecruiterActionSelect(discord.ui.Select):
             except discord.DiscordException:
                 return await interaction.followup.send("Не удалось выдать -Novizio-. Подними роль бота выше неё и проверь Manage Roles, затем повтори приём.", ephemeral=True)
         await self.bot.db.bump_recruiter(interaction.guild.id, interaction.user.id, accepted=1 if accepted else 0, rejected=0 if accepted else 1)
-        await self.bot.db.update_application(app["id"], status=status, handled_by=interaction.user.id, updated_at=self.bot.now_iso())
+        await self.bot.db.update_application(app["id"], status=status, interview_room_id=None, interview_until=None, handled_by=interaction.user.id, updated_at=self.bot.now_iso())
 
         await interaction.followup.send("✅ Решение сохранено.", ephemeral=True)
         await interaction.channel.send(embed=base_embed(title, f"Рекрутер: {interaction.user.mention}\nКандидат: <@{app['applicant_id']}>", color))
@@ -207,7 +220,39 @@ class RecruiterActionSelect(discord.ui.Select):
 class RecruiterActionView(SafeView):
     def __init__(self, bot):
         super().__init__(timeout=None)
+        self.bot = bot
         self.add_item(RecruiterActionSelect(bot))
+
+    @discord.ui.button(label="Взять заявку", emoji="🙋", style=discord.ButtonStyle.primary, custom_id="colombo:recruiter:claim", row=1)
+    @serialized("recruiter_decision")
+    async def claim(self, interaction, _button):
+        if not isinstance(interaction.user, discord.Member) or not await self.bot.is_recruiter(interaction.user):
+            return await interaction.response.send_message("Только Recruit- и руководство.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        app = await self.bot.db.get_application_by_thread(interaction.guild.id, interaction.channel.id)
+        if not app or app['status'] not in ('pending', 'interview'):
+            return await interaction.followup.send("Заявка уже закрыта или не найдена.", ephemeral=True)
+        claimed = await self.bot.db.claim_application(app['id'], interaction.user.id, self.bot.now_iso())
+        current = await self.bot.db.get_application_by_thread(interaction.guild.id, interaction.channel.id)
+        await update_assignment_card(interaction.message, current['assigned_to'])
+        if not claimed:
+            return await interaction.followup.send(f"Ответственный уже назначен: <@{current['assigned_to']}>.", ephemeral=True)
+        await interaction.followup.send("Заявка закреплена за тобой. Теперь доступны вызов, приём и отказ.", ephemeral=True)
+
+    @discord.ui.button(label="Освободить заявку", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="colombo:recruiter:release", row=1)
+    @serialized("recruiter_decision")
+    async def release(self, interaction, _button):
+        if not isinstance(interaction.user, discord.Member) or not await self.bot.is_recruiter(interaction.user):
+            return await interaction.response.send_message("Только Recruit- и руководство.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        app = await self.bot.db.get_application_by_thread(interaction.guild.id, interaction.channel.id)
+        if not app or app['status'] not in ('pending', 'interview'):
+            return await interaction.followup.send("Заявка уже закрыта или не найдена.", ephemeral=True)
+        if app.get('assigned_to') != interaction.user.id and not await self.bot.can_manage(interaction.user):
+            return await interaction.followup.send("Освободить заявку может ответственный рекрутер или Leader.", ephemeral=True)
+        await self.bot.db.release_application(app['id'], self.bot.now_iso())
+        await update_assignment_card(interaction.message, None)
+        await interaction.followup.send("Заявка свободна. Резерв голосового канала снят.", ephemeral=True)
 
 
 class VacationModal(SafeModal, title="Заявка на отдых"):

@@ -100,7 +100,7 @@ async def provision(bot, guild, selected):
             cls = discord.VoiceChannel if voice else discord.TextChannel
             if not isinstance(ch, cls):
                 matches = [c for c in guild.channels if isinstance(c, cls) and
-                           ((voice and c.name == name and c.category_id == cats[cat].id) or
+                           ((voice and c.name in ((name, 'Обзвон • Colombo') if key == 'interview_voice_channel_id' else (name,)) and c.category_id == cats[cat].id) or
                             (not voice and c.topic == f'Colombo • {key} • управляется ботом'))]
                 if len(matches) > 1:
                     raise ValueError(f'Несколько каналов {name}: проверь дубликаты.')
@@ -114,13 +114,18 @@ async def provision(bot, guild, selected):
             elif not voice and ch.topic == f'Colombo • {key} • управляется ботом':
                 await ch.edit(overwrites=overwrites(audience, reviewers=reviewers), reason='Colombo: обновление ролей')
             await bot.db.set_config(guild.id, **{key: ch.id})
+            if key == 'interview_voice_channel_id' and ch.name == 'Обзвон • Colombo':
+                await ch.edit(name='Обзвон 1 • Colombo', reason='Colombo: три канала обзвона')
             channels[key] = ch
             return ch
 
         await channel('application_panel_channel_id', '📩・заявка-в-семью', 'recruitment_category_id', [guild.default_role])
         await channel('applications_parent_channel_id', '📋・заявки-рекрутам', 'recruitment_category_id', [guild.default_role], staff)
         await channel('interview_channel_id', '📞・вызов-на-обзвон', 'recruitment_category_id', [guild.default_role])
-        await channel('interview_voice_channel_id', 'Обзвон • Colombo', 'recruitment_category_id', [guild.default_role], voice=True)
+        # Keep the original first channel; add two more without duplicating it on repeated setup.
+        await channel('interview_voice_channel_id', 'Обзвон 1 • Colombo', 'recruitment_category_id', [guild.default_role], voice=True)
+        await channel('interview_voice_2_id', 'Обзвон 2 • Colombo', 'recruitment_category_id', [guild.default_role], voice=True)
+        await channel('interview_voice_3_id', 'Обзвон 3 • Colombo', 'recruitment_category_id', [guild.default_role], voice=True)
         await channel('case_panel_channel_id', '📁・личное-дело', 'family_category_id', family)
         await channel('vacation_panel_channel_id', '🌴・заявка-на-отдых', 'family_category_id', family)
         await channel('vacation_review_channel_id', '🗂・рассмотрение-отдыха', 'family_category_id', family, leaders)
