@@ -58,14 +58,14 @@ class ColomboBot(commands.Bot):
         from .provisioning import provision
         for guild in self.guilds:
             cfg = await self.db.get_config(guild.id)
-            if cfg.get('server_layout_version') == 3:
+            if cfg.get('server_layout_version') == 4:
                 continue
             if not all(any(r.name == name for r in guild.roles) for name in ('Leader', 'Recruit-', 'Colombo')):
                 continue
             try:
                 result = await provision(self, guild, {})
                 issues = [f.value for f in result.fields if f.name == 'Проверь']
-                print(f'Colombo layout v3 ready | guild={guild.id} | warnings={issues}')
+                print(f'Colombo layout v4 ready | guild={guild.id} | warnings={issues}')
             except Exception as exc:
                 print(f'Colombo layout migration incomplete: {type(exc).__name__}: {exc}')
 

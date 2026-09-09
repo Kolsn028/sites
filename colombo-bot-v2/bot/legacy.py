@@ -39,10 +39,18 @@ async def migrate_legacy(guild, roles):
             for ch in guild.channels:
                 if old in ch.overwrites:
                     transfers.append((ch, merge_overwrite(ch.overwrites_for(old), ch.overwrites_for(new))))
-            # Do not delete a role with general capabilities absent from the target.
-            if old.permissions.value & ~new.permissions.value:
-                warnings.append(f'Не удалена {old.name}: у неё есть общие права, отсутствующие у {new.name}.')
-                continue
+            # Keep ordinary communication capabilities. Old moderation/admin powers do not
+            # belong to the requested bot-managed hierarchy and are not copied to new roles.
+            communication = discord.Permissions.none()
+            for name in ('view_channel', 'send_messages', 'send_messages_in_threads',
+                         'read_message_history', 'embed_links', 'attach_files', 'add_reactions',
+                         'use_external_emojis', 'use_external_stickers', 'connect', 'speak',
+                         'stream', 'use_voice_activation', 'use_application_commands'):
+                setattr(communication, name, True)
+            value = new.permissions.value | (old.permissions.value & communication.value)
+            if value != new.permissions.value:
+                new = await new.edit(permissions=discord.Permissions(value), reason='Colombo: перенос прав общения')
+                roles[LEGACY[old.name]] = new
             for member in list(old.members):
                 await member.add_roles(new, reason='Colombo: перенос старой роли')
             for ch, overwrite in transfers:
