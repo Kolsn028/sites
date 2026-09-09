@@ -214,7 +214,9 @@ async def provision(bot, guild, selected):
                     warnings.append('Не всем участникам удалось выдать Colombo: проверь права бота.')
                     break
         # main is the next family rank, with exactly Novizio's permissions.
-        novice, main = roles['accepted_role_id'], roles['main_role_id']
+        fresh_roles = {r.id: r for r in await guild.fetch_roles()}
+        novice = fresh_roles.get(roles['accepted_role_id'].id, roles['accepted_role_id'])
+        main = fresh_roles.get(roles['main_role_id'].id, roles['main_role_id'])
         await main.edit(permissions=novice.permissions, colour=novice.colour,
                         reason='Colombo: main имеет права Novizio')
         if main.position <= novice.position:

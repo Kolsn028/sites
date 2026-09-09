@@ -69,6 +69,8 @@ class ColomboBot(commands.Bot):
                 issues = [f.value for f in result.fields if f.name == 'Проверь']
                 print(f'Colombo layout v8 ready | guild={guild.id} | warnings={issues}')
             except Exception as exc:
+                import traceback
+                traceback.print_exc()
                 print(f'Colombo layout migration incomplete: {type(exc).__name__}: {exc}')
 
     async def on_member_join(self, member):
