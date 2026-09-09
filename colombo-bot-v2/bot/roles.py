@@ -12,9 +12,9 @@ ROLE_SPECS = {
 }
 STAFF_KEYS = ('leader_role_id', 'dep_leader_role_id', 'high_staff_role_id', 'recruiter_role_id')
 HIGH_KEYS = STAFF_KEYS[:3]
-REPORT_KEYS = ('recruiter_role_id', 'high_staff_role_id', 'dep_leader_role_id')
-PROMOTION_KEYS = ('high_staff_role_id',)
-MANAGEMENT_KEYS = ('high_staff_role_id', 'dep_leader_role_id')
+REPORT_KEYS = STAFF_KEYS
+PROMOTION_KEYS = STAFF_KEYS
+MANAGEMENT_KEYS = HIGH_KEYS
 
 
 def named_role(guild, key):
@@ -37,35 +37,42 @@ def is_leader(member, cfg):
 
 
 def may_recruit(member, cfg):
-    return bool(has_role(member, cfg, ('recruiter_role_id',)))
+    return is_leader(member, cfg) or bool(has_role(member, cfg, STAFF_KEYS))
 
 
 def may_review_reports(member, cfg):
-    return bool(has_role(member, cfg, REPORT_KEYS))
+    return is_leader(member, cfg) or bool(has_role(member, cfg, REPORT_KEYS))
 
 
 def may_promote(member, cfg):
-    return bool(has_role(member, cfg, PROMOTION_KEYS))
+    return is_leader(member, cfg) or bool(has_role(member, cfg, PROMOTION_KEYS))
 
 
 def may_manage_recruiters(member, cfg):
-    return bool(has_role(member, cfg, MANAGEMENT_KEYS))
+    return is_leader(member, cfg) or bool(has_role(member, cfg, MANAGEMENT_KEYS))
 
 
 def may_review_vacation(member, cfg):
-    return bool(has_role(member, cfg, MANAGEMENT_KEYS))
+    return is_leader(member, cfg) or bool(has_role(member, cfg, MANAGEMENT_KEYS))
 
 
 def is_family(member, cfg):
     return is_leader(member, cfg) or has_role(member, cfg, STAFF_KEYS + ('accepted_role_id',))
 
 
-async def notify_recruiters(channel, guild, cfg, embed):
-    """Mention people individually: a Recruit role ping could also notify the Leader."""
-    role = guild.get_role(cfg.get('recruiter_role_id') or 0)
-    recruits = [m for m in role.members if not m.bot and not is_leader(m, cfg)
-                and not has_role(m, cfg, ('dep_leader_role_id',))] if role else []
-    batches = [recruits[i:i + 40] for i in range(0, len(recruits), 40)] or [[]]
+def assistant_mentions(guild, cfg):
+    role = guild.get_role(cfg.get('high_staff_role_id') or 0)
+    people = [m for m in role.members if not m.bot and not is_leader(m, cfg)
+              and not has_role(m, cfg, ('dep_leader_role_id',))] if role else []
+    return people
+
+
+async def notify_assistants(channel, guild, cfg, embed):
+    return await notify_people(channel, assistant_mentions(guild, cfg), embed)
+
+
+async def notify_people(channel, people, embed):
+    batches = [people[i:i+40] for i in range(0, len(people), 40)] or [[]]
     first = None
     for index, group in enumerate(batches):
         message = await channel.send(content=' '.join(m.mention for m in group) or None,
@@ -73,3 +80,10 @@ async def notify_recruiters(channel, guild, cfg, embed):
             allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=group, replied_user=False))
         first = first or message
     return first
+
+
+async def notify_recruiters(channel, guild, cfg, embed):
+    role = guild.get_role(cfg.get('recruiter_role_id') or 0)
+    people = [m for m in role.members if not m.bot and not is_leader(m, cfg)
+              and not has_role(m, cfg, ('dep_leader_role_id',))] if role else []
+    return await notify_people(channel, people, embed)

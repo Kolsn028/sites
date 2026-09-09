@@ -16,13 +16,13 @@ class RolePolicy(unittest.IsolatedAsyncioTestCase):
     def test_hierarchy_access_matrix(self):
         for rank in range(1,7):
             m=member([rank],admin=True)
-            self.assertEqual(bool(may_recruit(m,CFG)),rank==4)
-            self.assertEqual(bool(may_review_reports(m,CFG)),rank in (2,3,4))
-            self.assertEqual(bool(may_promote(m,CFG)),rank==3)
-            self.assertEqual(bool(may_review_vacation(m,CFG)),rank in (2,3))
-            self.assertEqual(bool(may_manage_recruiters(m,CFG)),rank in (2,3))
+            self.assertEqual(bool(may_recruit(m,CFG)),rank in (1,2,3,4))
+            self.assertEqual(bool(may_review_reports(m,CFG)),rank in (1,2,3,4))
+            self.assertEqual(bool(may_promote(m,CFG)),rank in (1,2,3,4))
+            self.assertEqual(bool(may_review_vacation(m,CFG)),rank in (1,2,3))
+            self.assertEqual(bool(may_manage_recruiters(m,CFG)),rank in (1,2,3))
             self.assertEqual(bool(is_family(m,CFG)),rank!=6)
-        self.assertFalse(may_recruit(member([],admin=True,uid=999),CFG))
+        self.assertTrue(may_recruit(member([],admin=True,uid=999),CFG))
         self.assertTrue(may_recruit(member([2,4]),CFG))
 
     async def test_recruit_notifications_exclude_leader_and_deputy_with_recruit_role(self):
@@ -63,3 +63,12 @@ class RolePolicy(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(e.image.url,'attachment://colombo-banner.png')
         self.assertLess(len(e.description),220)
         self.assertEqual(len(e.fields),0)
+
+    async def test_assistant_pings_exclude_both_leaders_with_overlapping_roles(self):
+        from bot.roles import notify_assistants
+        people=[member([3],uid=10),member([1,3],uid=11),member([2,3],uid=12)]
+        guild=SimpleNamespace(get_role=lambda rid:SimpleNamespace(members=people) if rid==3 else None)
+        channel=SimpleNamespace(send=AsyncMock())
+        await notify_assistants(channel,guild,CFG,None)
+        self.assertEqual(channel.send.call_args.kwargs['content'],'<@10>')
+        self.assertEqual([m.id for m in channel.send.call_args.kwargs['allowed_mentions'].users],[10])

@@ -112,7 +112,7 @@ def register_commands(bot):
     @bot.tree.command(name="recruiter_assign", description="Назначить Recruit-: Ass.Deputy или Deputy Leader")
     async def recruiter_assign(i: discord.Interaction, member: discord.Member):
         if not isinstance(i.user, discord.Member) or not await bot.can_assign_recruiter(i.user):
-            return await i.response.send_message("Назначают только Ass.Deputy и Deputy Leader.", ephemeral=True)
+            return await i.response.send_message("Назначают Ass.Deputy, Deputy Leader и Leader.", ephemeral=True)
         if member.bot:
             return await i.response.send_message("Выбери участника, а не бота.", ephemeral=True)
         await i.response.defer(ephemeral=True)
@@ -128,7 +128,7 @@ def register_commands(bot):
 
     @bot.tree.error
     async def on_error(i,error):
-        print('App command error:',repr(error)); text='⛔ Нужна роль Leader или права администратора.' if isinstance(error,app_commands.CheckFailure) else '⚠️ Произошла ошибка. Проверь права и `/setup`.'
+        print('App command error:',repr(error)); text='⛔ Нужна роль Leader, Deputy Leader или права администратора.' if isinstance(error,app_commands.CheckFailure) else '⚠️ Произошла ошибка. Проверь права и `/setup`.'
         try:
             if i.response.is_done(): await i.followup.send(text,ephemeral=True)
             else: await i.response.send_message(text,ephemeral=True)

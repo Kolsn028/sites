@@ -139,7 +139,7 @@ async def provision(bot, guild, selected):
         await channel('inactivity_report_channel_id', '📉・контроль-неактива', 'management_category_id', staff)
 
         await channel('contract_panel_channel_id', '🟠・активация-контрактов', 'family_category_id', family, staff)
-        await channel('promotion_panel_channel_id', '😎・система-повышения', 'family_category_id', family, leaders)
+        await channel('promotion_panel_channel_id', '😎・система-повышения', 'family_category_id', family, staff)
 
         panels = [('application', application_panel_embed, ApplicationPanelView),
                   ('vacation', vacation_panel_embed, VacationPanelView),
@@ -195,7 +195,7 @@ async def provision(bot, guild, selected):
         # Existing open contract threads also need the newly authorized recruiters.
         contract_parent = channels['contract_panel_channel_id']
         for thread in guild.threads:
-            if thread.parent_id == contract_parent.id:
+            if thread.parent_id in (contract_parent.id, channels['promotion_panel_channel_id'].id):
                 for member in recruiter.members:
                     if not member.bot:
                         await thread.add_user(member)
@@ -213,5 +213,5 @@ async def provision(bot, guild, selected):
         result.add_field(name='Следующий шаг', value='Выдай роли нужным участникам. Чтобы использовать свои роли, повтори `/setup` и выбери их в параметрах. Права каналов, созданных ботом, обновляются автоматически. Права подключённых вручную каналов проверь отдельно.', inline=False)
         if warnings:
             result.add_field(name='Проверь', value='\n'.join(warnings)[:1024], inline=False)
-        await bot.db.set_config(guild.id, server_layout_version=5)
+        await bot.db.set_config(guild.id, server_layout_version=6)
         return result

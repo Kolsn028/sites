@@ -1,7 +1,7 @@
 """Private contract and promotion workflows. Evidence is checked by staff."""
 import discord
 from .interactions import SafeView, SafeModal, private_thread, serialized
-from .roles import configured_roles, HIGH_KEYS, STAFF_KEYS
+from .roles import configured_roles, HIGH_KEYS, STAFF_KEYS, notify_assistants, notify_recruiters
 from .ui import base_embed
 
 RULES = ('**1 → 3 ранг**\n'
@@ -37,7 +37,7 @@ async def submit(bot, i, kind, details):
         existing = await bot.db._one('SELECT * FROM progress_requests WHERE guild_id=? AND member_id=? AND kind=? AND status=\'pending\'', (i.guild_id, i.user.id, kind))
         if existing:
             return await i.followup.send(f"У тебя уже есть открытая ветка: <#{existing['thread_id']}>.", ephemeral=True)
-        thread = await private_thread(parent, i.user, configured_roles(i.guild, cfg, STAFF_KEYS if kind == 'contract' else HIGH_KEYS),
+        thread = await private_thread(parent, i.user, configured_roles(i.guild, cfg, STAFF_KEYS),
                                       f'{"контракт" if kind == "contract" else "повышение"}-{i.user.display_name}')
         try:
             async with bot.db.lock:
@@ -46,7 +46,7 @@ async def submit(bot, i, kind, details):
                 await bot.db.conn.commit()
             embed = base_embed('🟡 Проверка контракта' if kind == 'contract' else '🟡 Заявка на повышение',
                 f'Участник: {i.user.mention}\n{details}\n\n**Прикрепи скриншоты в эту ветку.**\n'
-                + ('Проверяют: Recruit-, Ass.Deputy, Deputy Leader. ' if kind == 'contract' else 'Проверяет: Ass.Deputy. ') + 'Самостоятельное одобрение запрещено.')
+                + ('Проверяют: Recruit- и выше. ' if kind == 'contract' else 'Повышение до 3 ранга проверяет Recruit- и выше. ') + 'Самостоятельное одобрение запрещено.')
             if kind == 'promotion':
                 embed.add_field(name='Что проверяет руководство', value='10 помощей • 10 разных каптов • 10 дней в семье • обзвон • активность', inline=False)
             await thread.send(embed=embed, view=ProgressReviewView(bot), allowed_mentions=discord.AllowedMentions.none())
@@ -56,6 +56,8 @@ async def submit(bot, i, kind, details):
                 await bot.db.conn.commit()
             await thread.delete(reason='Colombo: не удалось открыть заявку')
             raise
+        notifier = notify_recruiters if kind == 'promotion' else notify_assistants
+        await notifier(thread, i.guild, cfg, base_embed('🔔 Нужна проверка', 'Новая заявка. Доказательства — в этой ветке.'))
         await i.followup.send(f'Готово: {thread.mention}. Загрузи сюда доказательства.', ephemeral=True)
 
 
@@ -116,7 +118,7 @@ class DecisionModal(SafeModal, title='Решение по заявке'):
                 return await i.followup.send('Заявка уже закрыта или не найдена.', ephemeral=True)
             allowed = await self.bot.can_promote(i.user) if row['kind'] == 'promotion' else await self.bot.is_high_staff(i.user)
             if not allowed:
-                return await i.followup.send('Повышения проверяет Ass.Deputy; контракты — Recruit-, Ass.Deputy, Deputy Leader.', ephemeral=True)
+                return await i.followup.send('Проверка доступна Recruit- и всем старшим ролям.', ephemeral=True)
             if row['member_id'] == i.user.id:
                 return await i.followup.send('Свою заявку проверять нельзя.', ephemeral=True)
             member = i.guild.get_member(row['member_id'])

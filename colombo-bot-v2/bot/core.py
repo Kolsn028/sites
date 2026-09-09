@@ -58,14 +58,14 @@ class ColomboBot(commands.Bot):
         from .provisioning import provision
         for guild in self.guilds:
             cfg = await self.db.get_config(guild.id)
-            if cfg.get('server_layout_version') == 5:
+            if cfg.get('server_layout_version') == 6:
                 continue
             if not all(any(r.name == name for r in guild.roles) for name in ('Leader', 'Recruit-', 'Colombo')):
                 continue
             try:
                 result = await provision(self, guild, {})
                 issues = [f.value for f in result.fields if f.name == 'Проверь']
-                print(f'Colombo layout v5 ready | guild={guild.id} | warnings={issues}')
+                print(f'Colombo layout v6 ready | guild={guild.id} | warnings={issues}')
             except Exception as exc:
                 print(f'Colombo layout migration incomplete: {type(exc).__name__}: {exc}')
 
@@ -82,7 +82,7 @@ class ColomboBot(commands.Bot):
 
     async def can_manage(self, member):
         cfg = await self.db.get_config(member.guild.id)
-        return is_leader(member, cfg) or member.guild_permissions.administrator
+        return is_leader(member, cfg) or has_role(member, cfg, ('dep_leader_role_id',)) or member.guild_permissions.administrator
 
     async def is_recruiter(self, member):
         return may_recruit(member, await self.db.get_config(member.guild.id))
