@@ -8,11 +8,9 @@ from bot.core import ColomboBot
 from bot.database import Database
 from bot.commands import register_commands
 
-from pathlib import Path
-DATABASE_PATH = os.getenv("DATABASE_PATH", "data/bot.db")
-# This upgrade must never replace the user's existing history with an empty database.
-if os.getenv("RAILWAY_ENVIRONMENT_ID") and not Path(DATABASE_PATH).is_file():
-    raise RuntimeError("Existing database required. Restore the verified SQLite backup on the persistent volume before deployment.")
+# User-approved fresh v9 database. Existing v9 data is reopened, never deleted on restart.
+DATABASE_PATH = os.getenv("DATABASE_PATH", "data/colombo-v9.db")
+print(f"Database storage: path={DATABASE_PATH} data_mount={os.path.ismount(os.path.abspath('data'))}", flush=True)
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
