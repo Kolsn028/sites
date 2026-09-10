@@ -207,7 +207,7 @@ async def provision(bot, guild, selected):
                         await thread.add_user(member)
         base_role = roles['colombo_role_id']
         for member in guild.members:
-            if not member.bot and not member.get_role(base_role.id):
+            if not member.bot and not member.get_role(base_role.id) and not await bot.db.pending_vacation_for_member(guild.id,member.id):
                 try:
                     await member.add_roles(base_role, reason='Colombo: базовая роль участника')
                 except discord.Forbidden:
@@ -233,5 +233,7 @@ async def provision(bot, guild, selected):
         result.add_field(name='Следующий шаг', value='Выдай роли нужным участникам. Чтобы использовать свои роли, повтори `/setup` и выбери их в параметрах. Права каналов, созданных ботом, обновляются автоматически. Права подключённых вручную каналов проверь отдельно.', inline=False)
         if warnings:
             result.add_field(name='Проверь', value='\n'.join(warnings)[:1024], inline=False)
-        await bot.db.set_config(guild.id, server_layout_version=8)
+        from .migration_v9 import migrate_guild
+        await migrate_guild(bot,guild)
+        await bot.db.set_config(guild.id, server_layout_version=9)
         return result

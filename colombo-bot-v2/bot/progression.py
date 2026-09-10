@@ -157,6 +157,8 @@ class DecisionModal(SafeModal, title='Решение по заявке'):
                 await self.bot.db.conn.execute('UPDATE progress_requests SET status=?,handled_by=?,decision=? WHERE thread_id=?',
                     (status,i.user.id,str(self.reason),self.thread_id))
                 await self.bot.db.conn.commit()
+            from .profiles import refresh_member
+            await refresh_member(self.bot,i.guild,row['member_id'])
             await i.followup.send('Решение сохранено.', ephemeral=True)
             await i.channel.edit(archived=True, locked=True)
 

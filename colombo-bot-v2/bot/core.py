@@ -30,6 +30,10 @@ class ColomboBot(commands.Bot):
         from .progression import ContractPanelView, PromotionPanelView, ProgressReviewView
         for view in (ContractPanelView(self), PromotionPanelView(self), ProgressReviewView(self)):
             self.add_view(view)
+        from .profiles import ProfileLauncher
+        self.add_view(ProfileLauncher(self))
+        from .leave import ReturnDecisionView
+        self.add_view(ReturnDecisionView(self))
         from .events import EventPanelView, EventView
         self.add_view(EventPanelView(self)); self.add_view(EventView(self))
         gid=int(os.getenv("GUILD_ID")) if os.getenv("GUILD_ID") else None
@@ -60,14 +64,14 @@ class ColomboBot(commands.Bot):
         from .provisioning import provision
         for guild in self.guilds:
             cfg = await self.db.get_config(guild.id)
-            if cfg.get('server_layout_version') == 8:
+            if cfg.get('server_layout_version') == 9:
                 continue
             if not all(any(r.name == name for r in guild.roles) for name in ('Leader', 'Recruit-', 'Colombo')):
                 continue
             try:
                 result = await provision(self, guild, {})
                 issues = [f.value for f in result.fields if f.name == 'Проверь']
-                print(f'Colombo layout v8 ready | guild={guild.id} | warnings={issues}')
+                print(f'Colombo layout v9 ready | guild={guild.id} | warnings={issues}')
             except Exception as exc:
                 import traceback
                 traceback.print_exc()
@@ -108,7 +112,7 @@ class ColomboBot(commands.Bot):
         return may_manage_recruiters(member, await self.db.get_config(member.guild.id))
 
     def activity_points(self,cat):
-        return {"capt":int(os.getenv("CAPT_POINTS","3")),"mp":int(os.getenv("MP_POINTS","2")),"msh":int(os.getenv("MSH_POINTS","2")),"training":int(os.getenv("TRAINING_POINTS","1")),"other":int(os.getenv("OTHER_POINTS","1"))}.get(cat,0)
+        return {"capt":int(os.getenv("CAPT_POINTS","3")),"mp":int(os.getenv("MP_POINTS","2")),"msh":int(os.getenv("MSH_POINTS","2")),"training":int(os.getenv("TRAINING_POINTS","1")),"other":int(os.getenv("OTHER_POINTS","1")),"mcl":2,"vzm":2,"vzz":2,"contract":1}.get(cat,0)
 
     async def ensure_personal_case(self,member):
         async with self.operation_locks[("case", member.guild.id, member.id)]:
@@ -118,7 +122,10 @@ class ColomboBot(commands.Bot):
         ex=await self.db.get_case_by_member(member.guild.id,member.id)
         if ex:
             ch=member.guild.get_channel(ex["channel_id"])
-            if isinstance(ch,discord.TextChannel): return ch
+            if isinstance(ch,discord.TextChannel):
+                from .profiles import refresh_member
+                await refresh_member(self,member.guild,member.id,create=False)
+                return ch
         c=await self.db.get_config(member.guild.id); cat=member.guild.get_channel(c.get("case_category_id") or 0); high=member.guild.get_role(c.get("high_staff_role_id") or 0)
         if not isinstance(cat,discord.CategoryChannel) or not high: return None
         ow={member.guild.default_role:discord.PermissionOverwrite(view_channel=False),member:discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True,attach_files=True,embed_links=True),high:discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True,attach_files=True,embed_links=True,manage_messages=True)}
@@ -128,7 +135,10 @@ class ColomboBot(commands.Bot):
         ch=await member.guild.create_text_channel(name=safe_case_name(member.display_name,member.id),category=cat,overwrites=ow,topic=f"Личное дело • owner={member.id}",reason=f"Личное дело {member}")
         await self.db.create_case(member.guild.id,member.id,ch.id,self.now_iso())
         e=base_embed(f"📁 Личное дело • {member.display_name}",f"Владелец: {member.mention}\n\n1. Отправь сюда скрин/видео.\n2. Выбери тип активности.\n3. Recruit-, Ass.Deputy или Deputy Leader нажмёт **Засчитать** или **Отклонить**.\n\nВ статистику идут только подтверждённые отчёты.",0x6E56CF); e.set_thumbnail(url=member.display_avatar.url)
-        await ch.send(content=None,embed=e); return ch
+        await ch.send(content=None,embed=e)
+        from .profiles import refresh_member
+        await refresh_member(self,member.guild,member.id,create=False)
+        return ch
 
     async def on_message(self,msg):
         if msg.author.bot or not msg.guild or not msg.attachments: return
@@ -161,7 +171,7 @@ class ColomboBot(commands.Bot):
     async def update_vacation_status(self,guild):
         c=await self.db.get_config(guild.id); rows=await self.db.active_vacations(guild.id); today=date.today(); lines=[]
         for r in rows:
-            end=date.fromisoformat(r["end_date"]); lines.append(f"🌴 <@{r['member_id']}> — до **{end.strftime('%d.%m.%Y')}** · **{max((end-today).days,0)} дн.**")
+            end=date.fromisoformat(r["end_date"]); lines.append(f"🌴 <@{r['member_id']}> — до **{end.strftime('%d.%m.%Y')}** · **{max((end-today).days,0)} дн.** · возврат по заявке")
         e=base_embed("🌴 Кто сейчас в отпуске","\n".join(lines) if lines else "Сейчас активных отпусков нет.",0x3BAA72); ch=guild.get_channel(c.get("vacation_status_channel_id") or 0)
         if not isinstance(ch,discord.TextChannel): return None
         mid=c.get("vacation_status_message_id")
@@ -192,15 +202,8 @@ class ColomboBot(commands.Bot):
         m=await ch.send(embed=e); await self.db.set_config(guild.id,inactivity_report_message_id=m.id); return m
 
     async def expire_vacations(self,guild):
-        c=await self.db.get_config(guild.id); today=date.today(); changed=False
-        for r in await self.db.active_vacations(guild.id):
-            if date.fromisoformat(r["end_date"])<today:
-                await self.db.update_vacation(r["id"],status="expired",updated_at=self.now_iso()); m=guild.get_member(r["member_id"]); role=guild.get_role(c.get("vacation_role_id") or 0)
-                if m and role:
-                    try: await m.remove_roles(role,reason="Отпуск завершён")
-                    except discord.DiscordException: pass
-                changed=True
-        if changed: await self.update_vacation_status(guild)
+        # The date is informational: only an approved return restores roles.
+        await self.update_vacation_status(guild)
 
     @tasks.loop(hours=1)
     async def housekeeping(self):
