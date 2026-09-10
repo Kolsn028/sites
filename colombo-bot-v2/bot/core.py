@@ -57,6 +57,8 @@ class ColomboBot(commands.Bot):
     async def on_ready(self):
         await self.change_presence(activity=discord.Game(name="Colombo • заявки и личные дела"))
         print(f"✅ {self.user} online | guilds={len(self.guilds)}")
+        for guild in self.guilds:
+            await self.sync_guild_commands(guild)
         if getattr(self, '_layout_attempted', False):
             return
         self._layout_attempted = True
@@ -76,6 +78,29 @@ class ColomboBot(commands.Bot):
                 import traceback
                 traceback.print_exc()
                 print(f'Colombo layout migration incomplete: {type(exc).__name__}: {exc}')
+
+    async def sync_guild_commands(self, guild):
+        async with self.operation_locks[('commands', guild.id)]:
+            synced = getattr(self, '_commands_synced', set())
+            if guild.id in synced:
+                return
+            try:
+                self.tree.copy_global_to(guild=guild)
+                await self.tree.sync(guild=guild)
+                registered = await self.tree.fetch_commands(guild=guild)
+                for name in ('setup', 'setup_auto'):
+                    command = next(c for c in registered if c.name == name)
+                    options = [p.name for p in command.options]
+                    if 'main' not in options:
+                        raise RuntimeError(f'{name}: main missing after sync')
+                    print(f'Slash verified | guild={guild.id} | command={name} | options={options}')
+                synced.add(guild.id)
+                self._commands_synced = synced
+            except Exception as exc:
+                print(f'Guild slash sync error | guild={guild.id}: {exc}')
+
+    async def on_guild_join(self, guild):
+        await self.sync_guild_commands(guild)
 
     async def on_member_join(self, member):
         if member.bot:
