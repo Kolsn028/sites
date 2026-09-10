@@ -14,21 +14,38 @@ def admin_only():
 
 
 def register_commands(bot):
+    async def setup_access(i):
+        from .roles import may_manage_recruiters
+        if isinstance(i.user, discord.Member):
+            cfg = await bot.db.get_config(i.guild_id)
+            if may_manage_recruiters(i.user, cfg):
+                return True
+            # First setup must be possible before the role IDs have been saved.
+            if not cfg.get('role_schema_version'):
+                from .roles import HIGH_KEYS, named_role
+                for key in HIGH_KEYS:
+                    role = named_role(i.guild, key)
+                    if role and i.user.get_role(role.id):
+                        return True
+        raise app_commands.CheckFailure('Настройка доступна только Ass.Deputy, Deputy Leader, Leader и владельцу сервера.')
+
     @app_commands.guild_only()
-    @admin_only()
+    @app_commands.check(setup_access)
     @app_commands.describe(leader="Leader — красный, полное управление без упоминаний",
         deputy="Deputy Leader — отчёты, отдых, назначение рекрутов", ass_deputy="Ass.Deputy — отчёты, повышения, отдых, рекруты",
-        recruit="Recruit- — заявки и приём", novizio="-Novizio- — роль после приёма",
+        recruit="Recruit- — заявки и приём", main="main — 3 ранг, ниже Recruit-, доступ к семейным каналам и МП",
+        novizio="-Novizio- — роль после приёма",
         colombo="Colombo — роль всем вошедшим", vacation="Служебная роль на период отдыха")
     async def setup(i: discord.Interaction, leader: discord.Role | None = None,
                     deputy: discord.Role | None = None, ass_deputy: discord.Role | None = None,
-                    recruit: discord.Role | None = None, novizio: discord.Role | None = None,
+                    recruit: discord.Role | None = None, main: discord.Role | None = None,
+                    novizio: discord.Role | None = None,
                     colombo: discord.Role | None = None, vacation: discord.Role | None = None):
         await i.response.defer(ephemeral=True, thinking=True)
         from .provisioning import provision
         try:
             embed = await provision(bot, i.guild, dict(leader_role_id=leader, dep_leader_role_id=deputy,
-                high_staff_role_id=ass_deputy, recruiter_role_id=recruit, accepted_role_id=novizio,
+                high_staff_role_id=ass_deputy, recruiter_role_id=recruit, main_role_id=main, accepted_role_id=novizio,
                 colombo_role_id=colombo, vacation_role_id=vacation))
             await i.followup.send(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
         except ValueError as exc:
@@ -147,8 +164,9 @@ def register_commands(bot):
     @bot.tree.error
     async def on_error(i,error):
         print('App command error:',repr(error)); text='⛔ Нужна роль Leader, Deputy Leader или права администратора.' if isinstance(error,app_commands.CheckFailure) else '⚠️ Произошла ошибка. Проверь права и `/setup`.'
+        if isinstance(error, app_commands.CheckFailure) and i.command and i.command.name in ('setup', 'setup_auto'):
+            text = '⛔ Настройка доступна только Ass.Deputy, Deputy Leader, Leader и владельцу сервера.'
         try:
             if i.response.is_done(): await i.followup.send(text,ephemeral=True)
             else: await i.response.send_message(text,ephemeral=True)
         except discord.DiscordException: pass
-

@@ -47,8 +47,9 @@ async def provision(bot, guild, selected):
             await bot.db.set_config(guild.id, **{key: role.id})
         await bot.db.set_config(guild.id, role_schema_version=2)
         warnings.extend(await migrate_legacy(guild, roles))
-        ranked = [roles[k] for k in ROLE_SPECS if k != 'vacation_role_id']
-        if all(r < me.top_role for r in ranked):
+        # Higher staff roles may be above the bot; still order all editable ranks.
+        ranked = [roles[k] for k in ROLE_SPECS if k != 'vacation_role_id' and roles[k] < me.top_role]
+        if ranked:
             positions = sorted([r.position for r in ranked], reverse=True)
             if len(set(positions)) == len(positions):
                 await guild.edit_role_positions(positions=dict(zip(ranked, positions)), reason='Colombo: порядок рангов')
