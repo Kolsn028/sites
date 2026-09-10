@@ -67,11 +67,8 @@ def register_commands(bot):
 
     @bot.tree.command(name="profile",description="Карточка активности участника")
     async def profile(i:discord.Interaction,member:discord.Member|None=None):
-        member=member or i.user; r30,last=await bot.db.member_activity_stats(i.guild.id,member.id,30); rall,_=await bot.db.member_activity_stats(i.guild.id,member.id,None)
-        p30=sum(x['points'] for x in r30); n30=sum(x['count'] for x in r30); pall=sum(x['points'] for x in rall); nall=sum(x['count'] for x in rall)
-        details='\n'.join(f"{activity_type_label(x['category'])}: **{x['count']}** · {x['points']} б." for x in r30) or "Нет подтверждённых отчётов за 30 дней."
-        last_text=datetime.fromisoformat(last['created_at']).strftime('%d.%m.%Y %H:%M') if last else 'нет'; case=await bot.db.get_case_by_member(i.guild.id,member.id); case_text=f"<#{case['channel_id']}>" if case else 'не создано'
-        e=base_embed(f"📊 Профиль активности • {member.display_name}",f"Участник: {member.mention}\nЛичное дело: {case_text}\nПоследняя активность: **{last_text}**",0x6E56CF); e.set_thumbnail(url=member.display_avatar.url); e.add_field(name="Последние 30 дней",value=f"**{n30}** отчётов · **{p30}** баллов\n\n{details}",inline=False); e.add_field(name="За всё время",value=f"**{nall}** отчётов · **{pall}** баллов",inline=False); await i.response.send_message(embed=e)
+        from .profiles import open_profile
+        await open_profile(bot,i,(member or i.user).id)
 
     @bot.tree.command(name="activity_top",description="Топ активности участников")
     async def activity_top(i:discord.Interaction,days:app_commands.Range[int,1,90]=7):
@@ -122,6 +119,27 @@ def register_commands(bot):
             return await i.followup.send("Проверь роль Recruit- и положение роли бота.", ephemeral=True)
         await member.add_roles(role, reason=f"Colombo: назначение рекрута участником {i.user.id}")
         await i.followup.send(f"Роль Recruit- выдана {member.mention}.", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+    @bot.tree.command(name="report_event",description="Связать отчёт со сбором: Recruit- и выше")
+    async def report_event(i:discord.Interaction,report_id:int,event_id:int):
+        if not isinstance(i.user,discord.Member) or not await bot.is_high_staff(i.user):
+            return await i.response.send_message('Только Recruit- и выше.',ephemeral=True)
+        await i.response.defer(ephemeral=True)
+        async with bot.db.lock:
+            report=await bot.db.get_activity(report_id)
+            event=await bot.db._one('SELECT * FROM family_events WHERE id=? AND guild_id=?',(event_id,i.guild_id))
+            if not report or report['guild_id']!=i.guild_id or not event:
+                return await i.followup.send('Отчёт или сбор не найден на этом сервере.',ephemeral=True)
+            participation=await bot.db._one('SELECT 1 FROM event_signups WHERE event_id=? AND member_id=?',(event_id,report['member_id']))
+            if not participation:
+                return await i.followup.send('Автор отчёта не записан в этот сбор.',ephemeral=True)
+            await bot.db.conn.execute('UPDATE activity_submissions SET event_id=?,category=? WHERE id=?',(event_id,event['kind'],report_id))
+            from .roster import audit
+            await audit(bot.db,i.guild_id,i.user.id,'report_event',report_id,{'event':event_id})
+            await bot.db.conn.commit()
+        from .profiles import refresh_member
+        await refresh_member(bot,i.guild,report['member_id'])
+        await i.followup.send('Отчёт связан со сбором. Подтверждение посещения остаётся за организатором.',ephemeral=True)
 
     for command in bot.tree.get_commands():
         command.guild_only = True

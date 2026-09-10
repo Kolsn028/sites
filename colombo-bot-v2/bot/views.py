@@ -317,6 +317,11 @@ class VacationPanelView(SafeView):
     async def open_vacation(self, interaction, _button):
         await interaction.response.send_modal(VacationModal(self.bot))
 
+    @discord.ui.button(label="Вернуться из отпуска", emoji="↩️", style=discord.ButtonStyle.success, custom_id="colombo:vacation:return")
+    async def return_vacation(self, interaction, _button):
+        from .leave import ReturnModal
+        await interaction.response.send_modal(ReturnModal(self.bot))
+
 
 class VacationDecisionView(SafeView):
     def __init__(self, bot):
@@ -329,20 +334,21 @@ class VacationDecisionView(SafeView):
             return await interaction.response.send_message("⛔ Недостаточно прав.", ephemeral=True)
         vid = _id_from_title(interaction.message, "Заявка на отдых")
         vac = await self.bot.db.get_vacation(vid) if vid else None
-        if not vac or vac["status"] != "pending":
+        if not vac or vac['guild_id'] != interaction.guild_id or vac["status"] not in ('pending','applying'):
             return await interaction.response.send_message("Заявка уже обработана или не найдена.", ephemeral=True)
         await interaction.response.defer()
-        status = "approved" if approve else "rejected"
-        await self.bot.db.update_vacation(vac["id"], status=status, handled_by=interaction.user.id, updated_at=self.bot.now_iso())
-        member = interaction.guild.get_member(vac["member_id"])
-        if approve and member:
-            cfg = await self.bot.db.get_config(interaction.guild.id)
-            role = interaction.guild.get_role(cfg.get("vacation_role_id") or 0)
-            if role:
-                try:
-                    await member.add_roles(role)
-                except discord.DiscordException:
-                    await interaction.followup.send("Отдых одобрен, но роль выдать не удалось. Проверь права и положение роли бота.", ephemeral=True)
+        async with self.bot.operation_locks[('leave',interaction.guild_id,vac['member_id'])]:
+            vac=await self.bot.db.get_vacation(vac['id'])
+            if vac['status'] not in ('pending','applying'):
+                return await interaction.followup.send('Заявка уже обработана.',ephemeral=True)
+            if vac['status']=='applying' and not approve:
+                return await interaction.followup.send('Снятие ролей уже начато. Повтори одобрение для завершения.',ephemeral=True)
+            if approve:
+                from .leave import begin_leave
+                await begin_leave(self.bot,interaction.guild,vac)
+            else:
+                await self.bot.db.update_vacation(vac['id'],status='rejected',updated_at=self.bot.now_iso())
+            await self.bot.db.update_vacation(vac['id'],handled_by=interaction.user.id)
         e = interaction.message.embeds[0].copy()
         e.color = 0x3BAA72 if approve else 0xD64045
         e.set_field_at(2, name="Статус", value=("✅ Одобрено" if approve else "❌ Отклонено") + f" • {interaction.user.mention}", inline=False)
@@ -384,6 +390,10 @@ class ActivityTypeSelect(discord.ui.Select):
         self.bot = bot
         super().__init__(placeholder="Выбрать тип активности…", min_values=1, max_values=1, custom_id="colombo:activity:type", options=[
             discord.SelectOption(label="Капт", value="capt", emoji="⚔️"),
+            discord.SelectOption(label="MCL",value="mcl",emoji="🟥"),
+            discord.SelectOption(label="VZM",value="vzm",emoji="🟩"),
+            discord.SelectOption(label="VZZ",value="vzz",emoji="🟦"),
+            discord.SelectOption(label="Контракт",value="contract",emoji="🟠"),
             discord.SelectOption(label="МП", value="mp", emoji="🎯"),
             discord.SelectOption(label="МШ", value="msh", emoji="🛡️"),
             discord.SelectOption(label="Тренировка", value="training", emoji="🏋️"),
@@ -464,6 +474,8 @@ class ActivityReviewView(SafeView):
         e.set_field_at(2, name="Статус", value=f"✅ Засчитано • {interaction.user.mention}", inline=False)
         await interaction.response.edit_message(embed=e, view=None)
         await self.bot.update_inactivity_report(interaction.guild)
+        from .profiles import refresh_member
+        await refresh_member(self.bot,interaction.guild,sub["member_id"])
 
     @discord.ui.button(label="Отклонить", emoji="❌", style=discord.ButtonStyle.danger, custom_id="colombo:activity:reject")
     async def reject(self, interaction, _button):

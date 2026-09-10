@@ -188,6 +188,8 @@ class Database:
         for column, sql_type in {"assigned_to": "INTEGER", "interview_room_id": "INTEGER", "interview_until": "TEXT"}.items():
             if column not in columns:
                 await self.conn.execute(f"ALTER TABLE applications ADD COLUMN {column} {sql_type}")
+        from .schema_v9 import migrate
+        await migrate(self.conn)
         await self.conn.commit()
 
     async def close(self):
@@ -248,8 +250,8 @@ class Database:
             await self.conn.execute(f'UPDATE vacations SET {cols} WHERE id=?', [*data.values(), vacation_id]); await self.conn.commit()
 
     async def get_vacation(self, vacation_id): return await self._one('SELECT * FROM vacations WHERE id=?', (vacation_id,))
-    async def active_vacations(self, guild_id): return await self._all("SELECT * FROM vacations WHERE guild_id=? AND status='approved' ORDER BY end_date", (guild_id,))
-    async def pending_vacation_for_member(self, guild_id, member_id): return await self._one("SELECT * FROM vacations WHERE guild_id=? AND member_id=? AND status IN ('pending','approved') ORDER BY id DESC LIMIT 1", (guild_id,member_id))
+    async def active_vacations(self, guild_id): return await self._all("SELECT * FROM vacations WHERE guild_id=? AND status IN ('applying','approved','return_pending','restoring') ORDER BY end_date", (guild_id,))
+    async def pending_vacation_for_member(self, guild_id, member_id): return await self._one("SELECT * FROM vacations WHERE guild_id=? AND member_id=? AND status IN ('pending','applying','approved','return_pending','restoring') ORDER BY id DESC LIMIT 1", (guild_id,member_id))
 
     async def create_case(self, guild_id, member_id, channel_id, now_iso):
         async with self.lock:
@@ -282,7 +284,13 @@ class Database:
         return await self._all('''SELECT member_id,COUNT(*) reports,COALESCE(SUM(points),0) points,MAX(created_at) last_activity FROM activity_submissions WHERE guild_id=? AND status='approved' AND datetime(created_at)>=datetime('now',?) GROUP BY member_id ORDER BY points DESC,reports DESC,last_activity DESC LIMIT ?''', (guild_id,f'-{days} days',limit))
 
     async def last_activity_for_cases(self, guild_id):
-        return await self._all('''SELECT c.member_id,c.channel_id,c.created_at case_created_at,MAX(a.created_at) last_activity FROM personal_cases c LEFT JOIN activity_submissions a ON a.guild_id=c.guild_id AND a.member_id=c.member_id AND a.status='approved' WHERE c.guild_id=? AND c.status='active' GROUP BY c.member_id,c.channel_id,c.created_at''', (guild_id,))
+        return await self._all("""SELECT c.member_id,c.channel_id,c.created_at case_created_at,
+          (SELECT MAX(ts) FROM (
+            SELECT datetime(a.created_at) ts FROM activity_submissions a WHERE a.guild_id=c.guild_id AND a.member_id=c.member_id AND a.status='approved'
+            UNION ALL SELECT datetime(e.starts_at,'unixepoch') FROM family_events e JOIN event_signups s ON s.event_id=e.id
+              WHERE e.guild_id=c.guild_id AND s.member_id=c.member_id AND s.attended=1
+            UNION ALL SELECT datetime(p.created_at) FROM progress_requests p WHERE p.guild_id=c.guild_id AND p.member_id=c.member_id AND p.kind='contract' AND p.status='approved'
+          )) last_activity FROM personal_cases c WHERE c.guild_id=? AND c.status='active'""", (guild_id,))
 
 
     async def claim_application(self, app_id, recruiter_id, now):

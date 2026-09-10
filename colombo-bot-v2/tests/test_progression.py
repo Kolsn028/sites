@@ -27,7 +27,7 @@ class Progression(unittest.IsolatedAsyncioTestCase):
         modal=DecisionModal(self.bot,100,True);modal.reason._value='Проверил доказательства'
         await modal.on_submit(self.i);self.assertEqual((await self.row())['status'],'pending')
         modal.checklist._value='подтверждаю'
-        with patch('bot.progression.award_main',new=AsyncMock()) as award:
+        with patch('bot.progression.award_main',new=AsyncMock()) as award, patch('bot.profiles.refresh_member',new=AsyncMock()):
             await asyncio.gather(modal.on_submit(self.i),modal.on_submit(self.i))
             award.assert_awaited_once()
         self.assertEqual((await self.row())['status'],'approved');self.assertEqual(self.i.channel.send.await_count,1)
