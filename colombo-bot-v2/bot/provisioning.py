@@ -24,10 +24,12 @@ async def provision(bot, guild, selected):
         for key, (name, color) in ROLE_SPECS.items():
             saved = guild.get_role(cfg.get(key) or 0)
             # Retain explicit choices after migration, otherwise resolve the requested hierarchy.
-            role = selected.get(key) or (saved if cfg.get('role_schema_version') == 2 else None) or named_role(guild, key)
+            if cfg.get('role_schema_version', 0) != 3 and key == 'colombo_role_id':
+                saved = None  # Old field may point at Guest; never treat it as family.
+            role = selected.get(key) or (saved if cfg.get('role_schema_version') == 3 else None) or named_role(guild, key) or saved
             if role and (role.is_default() or role.managed):
                 raise ValueError('Выбери обычные роли сервера, не @everyone и не роли интеграций.')
-            if role and key in ('main_role_id', 'accepted_role_id', 'colombo_role_id', 'vacation_role_id') and role >= me.top_role:
+            if role and key in ('main_role_id', 'accepted_role_id', 'colombo_role_id', 'guest_role_id', 'vacation_role_id') and role >= me.top_role:
                 raise ValueError(f'Подними роль бота выше роли «{role.name}».')
             candidates[key] = role
         ids = [r.id for r in candidates.values() if r]
@@ -45,7 +47,7 @@ async def provision(bot, guild, selected):
                     warnings.append(f'Цвет {name} не изменён: роль выше бота.')
             roles[key] = role
             await bot.db.set_config(guild.id, **{key: role.id})
-        await bot.db.set_config(guild.id, role_schema_version=2)
+        await bot.db.set_config(guild.id, role_schema_version=3)
         warnings.extend(await migrate_legacy(guild, roles))
         # Higher staff roles may be above the bot; still order all editable ranks.
         ranked = [roles[k] for k in ROLE_SPECS if k != 'vacation_role_id' and roles[k] < me.top_role]
@@ -76,7 +78,7 @@ async def provision(bot, guild, selected):
         deputy = roles['dep_leader_role_id']
         leaders = [leader, deputy, high]
         staff = [*leaders, recruiter]
-        family = [roles['accepted_role_id'], roles['main_role_id'], *staff]
+        family = [roles['colombo_role_id'], roles['accepted_role_id'], roles['main_role_id'], *staff]
         specs = [
             ('events_category_id', 'COLOMBO • ПЛЮСЫ МП', family, []),
             ('recruitment_category_id', 'COLOMBO • НАБОР', [guild.default_role], []),
@@ -126,7 +128,14 @@ async def provision(bot, guild, selected):
             return ch
 
         await channel('application_panel_channel_id', '📩・заявка-в-семью', 'recruitment_category_id', [guild.default_role])
-        await channel('applications_parent_channel_id', '📋・заявки-рекрутам', 'recruitment_category_id', [guild.default_role], staff)
+        parent = await channel('applications_parent_channel_id', '📋・заявки-рекрутам', 'recruitment_category_id', [guild.default_role])
+        from .membership import secure_application_parent, sync_application_members
+        await secure_application_parent(parent)
+        for thread in guild.threads:
+            if thread.parent_id == parent.id:
+                app = await bot.db.get_application_by_thread(guild.id, thread.id)
+                if app:
+                    await sync_application_members(bot, thread, app)
         await channel('interview_channel_id', '📞・вызов-на-обзвон', 'recruitment_category_id', [guild.default_role])
         # Keep the original first channel; add two more without duplicating it on repeated setup.
         await channel('interview_voice_channel_id', 'Обзвон 1 • Colombo', 'recruitment_category_id', [guild.default_role], voice=True)
@@ -206,28 +215,23 @@ async def provision(bot, guild, selected):
                 for member in recruiter.members:
                     if not member.bot:
                         await thread.add_user(member)
-        base_role = roles['colombo_role_id']
-        for member in guild.members:
-            if not member.bot and not member.get_role(base_role.id) and not await bot.db.pending_vacation_for_member(guild.id,member.id):
-                try:
-                    await member.add_roles(base_role, reason='Colombo: базовая роль участника')
-                except discord.Forbidden:
-                    warnings.append('Не всем участникам удалось выдать Colombo: проверь права бота.')
-                    break
-        # main is the next family rank, with exactly Novizio's permissions.
+        from .membership import repair_members
+        repaired = await repair_members(bot, guild, roles)
+        print(f'Membership repaired | guild={guild.id} | members={repaired}')
+        # main is the next family rank, with exactly Test's permissions.
         fresh_roles = {r.id: r for r in await guild.fetch_roles()}
         novice = fresh_roles.get(roles['accepted_role_id'].id, roles['accepted_role_id'])
         main = fresh_roles.get(roles['main_role_id'].id, roles['main_role_id'])
         await main.edit(permissions=novice.permissions, colour=novice.colour,
-                        reason='Colombo: main имеет права Novizio')
+                        reason='Colombo: main имеет права Test')
         if main.position <= novice.position:
             await guild.edit_role_positions(positions={main: novice.position, novice: main.position},
-                                            reason='Colombo: main выше Novizio в доступных позициях')
+                                            reason='Colombo: main выше Test в доступных позициях')
         for ch in guild.channels:
             if novice in ch.overwrites:
                 ow = dict(ch.overwrites)
                 ow[main] = ch.overwrites_for(novice)
-                await ch.edit(overwrites=ow, reason='Colombo: равный доступ main и Novizio')
+                await ch.edit(overwrites=ow, reason='Colombo: равный доступ main и Test')
         result = base_embed('Сервер готов • Colombo', 'Разделы и панели настроены. Повторный запуск обновляет эту структуру.')
         result.add_field(name='Начало работы', value='\n'.join(channels[f'{kind}_panel_channel_id'].mention for kind in ('application', 'vacation', 'case')), inline=False)
         result.add_field(name='Роли', value='\n'.join(f'{name}: {roles[key].mention}' for key, (name, _) in ROLE_SPECS.items()), inline=False)
@@ -236,5 +240,5 @@ async def provision(bot, guild, selected):
             result.add_field(name='Проверь', value='\n'.join(warnings)[:1024], inline=False)
         from .migration_v9 import migrate_guild
         await migrate_guild(bot,guild)
-        await bot.db.set_config(guild.id, server_layout_version=9)
+        await bot.db.set_config(guild.id, server_layout_version=10)
         return result

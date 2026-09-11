@@ -183,15 +183,13 @@ class RecruiterActionSelect(discord.ui.Select):
         color = 0x3BAA72 if accepted else 0xD64045
         title = "✅ Кандидат принят" if accepted else "❌ По заявке отказ"
         if accepted:
-            role = interaction.guild.get_role(cfg.get("accepted_role_id") or 0)
-            if not applicant or not role:
-                return await interaction.followup.send("Участник вышел с сервера или роль -Novizio- не настроена. Решение не сохранено.", ephemeral=True)
-            base = interaction.guild.get_role(cfg.get("colombo_role_id") or 0)
-            grant = [role] + ([base] if base and not applicant.get_role(base.id) else [])
+            if not applicant:
+                return await interaction.followup.send("Участник вышел с сервера. Решение не сохранено.", ephemeral=True)
+            from .membership import accept_member
             try:
-                await applicant.add_roles(*grant, reason=f"Заявка #{app['id']}: принят в Colombo")
-            except discord.DiscordException:
-                return await interaction.followup.send("Не удалось выдать -Novizio-. Подними роль бота выше неё и проверь Manage Roles, затем повтори приём.", ephemeral=True)
+                await accept_member(applicant, cfg, f"Заявка #{app['id']}: принят в Colombo")
+            except (discord.DiscordException, ValueError) as exc:
+                return await interaction.followup.send(f"Не удалось завершить выдачу Colombo + Test и снятие Guest. Проверь роли и права бота, затем повтори приём. {exc}", ephemeral=True)
         await self.bot.db.bump_recruiter(interaction.guild.id, interaction.user.id, accepted=1 if accepted else 0, rejected=0 if accepted else 1)
         await self.bot.db.update_application(app["id"], status=status, interview_room_id=None, interview_until=None, handled_by=interaction.user.id, updated_at=self.bot.now_iso())
 
@@ -201,7 +199,7 @@ class RecruiterActionSelect(discord.ui.Select):
             log_ch = interaction.guild.get_channel(cfg.get("applications_log_channel_id") or 0)
             if isinstance(log_ch, discord.TextChannel):
                 await notify_recruiters(log_ch, interaction.guild, cfg,
-                    base_embed(f"Принят • заявка #{app['id']}", f"Кандидат: <@{app['applicant_id']}>\nРанг: **-Novizio-**\nРешение: {interaction.user.display_name}", 0x3BAA72))
+                    base_embed(f"Принят • заявка #{app['id']}", f"Кандидат: <@{app['applicant_id']}>\nРанг: **Test**\nРешение: {interaction.user.display_name}", 0x3BAA72))
         await self.bot.send_or_update_leaderboard(interaction.guild)
 
         if accepted and applicant and os.getenv("AUTO_CREATE_CASE_ON_ACCEPT", "true").lower() == "true":
@@ -234,6 +232,8 @@ class RecruiterActionView(SafeView):
             return await interaction.followup.send("Заявка уже закрыта или не найдена.", ephemeral=True)
         claimed = await self.bot.db.claim_application(app['id'], interaction.user.id, self.bot.now_iso())
         current = await self.bot.db.get_application_by_thread(interaction.guild.id, interaction.channel.id)
+        from .membership import sync_application_members
+        await sync_application_members(self.bot, interaction.channel, current)
         await update_assignment_card(interaction.message, current['assigned_to'])
         if not claimed:
             return await interaction.followup.send(f"Ответственный уже назначен: <@{current['assigned_to']}>.", ephemeral=True)
@@ -251,6 +251,8 @@ class RecruiterActionView(SafeView):
         if app.get('assigned_to') != interaction.user.id and not await self.bot.can_manage(interaction.user):
             return await interaction.followup.send("Освободить заявку может ответственный рекрутер.", ephemeral=True)
         await self.bot.db.release_application(app['id'], self.bot.now_iso())
+        from .membership import sync_application_members
+        await sync_application_members(self.bot, interaction.channel, {**app, 'assigned_to': None})
         await update_assignment_card(interaction.message, None)
         await interaction.followup.send("Заявка свободна. Резерв голосового канала снят.", ephemeral=True)
 

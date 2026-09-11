@@ -72,6 +72,11 @@ class CreateEventModal(SafeModal, title='Создать сбор • Colombo'):
         cfg=await self.bot.db.get_config(i.guild_id)
         ch=i.guild.get_channel(cfg.get(f'{self.kind}_panel_channel_id') or 0)
         if not isinstance(ch,discord.TextChannel): raise ValueError('Канал сбора не настроен: /setup.')
+        family_role=i.guild.get_role(cfg.get('colombo_role_id') or 0)
+        if not family_role:
+            raise ValueError('Сначала выбери семейную роль Colombo в /setup.')
+        if not family_role.mentionable and not ch.permissions_for(i.guild.me).mention_everyone:
+            raise ValueError('Для уведомления Colombo разреши боту упоминать все роли в этом канале.')
         await i.response.defer(ephemeral=True)
         async with self.bot.db.lock:
             cur=await self.bot.db.conn.execute('INSERT INTO family_events(guild_id,channel_id,creator_id,kind,title,starts_at,capacity,details,reserve_capacity) VALUES (?,?,?,?,?,?,?,?,?)',
@@ -79,7 +84,8 @@ class CreateEventModal(SafeModal, title='Создать сбор • Colombo'):
             eid=cur.lastrowid;await self.bot.db.conn.commit()
         row=await self.bot.db._one('SELECT * FROM family_events WHERE id=?',(eid,))
         try:
-            msg=await ch.send(embed=await card(self.bot.db,row),view=EventView(self.bot),allowed_mentions=discord.AllowedMentions.none())
+            family_role=i.guild.get_role(cfg.get('colombo_role_id') or 0)
+            msg=await ch.send(content=family_role.mention if family_role else None, embed=await card(self.bot.db,row),view=EventView(self.bot),allowed_mentions=discord.AllowedMentions(everyone=False,users=False,roles=[family_role] if family_role else [],replied_user=False))
         except Exception:
             async with self.bot.db.lock:
                 await self.bot.db.conn.execute('DELETE FROM family_events WHERE id=?',(eid,));await self.bot.db.conn.commit()

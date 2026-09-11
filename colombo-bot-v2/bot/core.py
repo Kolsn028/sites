@@ -66,14 +66,14 @@ class ColomboBot(commands.Bot):
         from .provisioning import provision
         for guild in self.guilds:
             cfg = await self.db.get_config(guild.id)
-            if cfg.get('server_layout_version') == 9:
+            if cfg.get('server_layout_version') == 10:
                 continue
-            if not all(any(r.name == name for r in guild.roles) for name in ('Leader', 'Recruit-', 'Colombo')):
+            if not all(any(r.name == name for r in guild.roles) for name in ('Leader', 'Recruit-')):
                 continue
             try:
                 result = await provision(self, guild, {})
                 issues = [f.value for f in result.fields if f.name == 'Проверь']
-                print(f'Colombo layout v9 ready | guild={guild.id} | warnings={issues}')
+                print(f'Colombo layout v10 ready | guild={guild.id} | warnings={issues}')
             except Exception as exc:
                 import traceback
                 traceback.print_exc()
@@ -91,7 +91,7 @@ class ColomboBot(commands.Bot):
                 for name in ('setup', 'setup_auto'):
                     command = next(c for c in registered if c.name == name)
                     options = [p.name for p in command.options]
-                    if 'main' not in options:
+                    if not {'main', 'guest', 'test', 'colombo'}.issubset(options):
                         raise RuntimeError(f'{name}: main missing after sync')
                     print(f'Slash verified | guild={guild.id} | command={name} | options={options}')
                 synced.add(guild.id)
@@ -106,7 +106,7 @@ class ColomboBot(commands.Bot):
         if member.bot:
             return
         cfg = await self.db.get_config(member.guild.id)
-        role = member.guild.get_role(cfg.get("colombo_role_id") or 0)
+        role = member.guild.get_role(cfg.get("guest_role_id") or 0)
         if role:
             try:
                 await member.add_roles(role, reason="Colombo: вход на сервер")

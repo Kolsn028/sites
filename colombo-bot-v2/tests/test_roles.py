@@ -5,7 +5,7 @@ from bot.roles import may_recruit, may_review_reports, is_family, notify_recruit
 from bot.ui import application_banner_file, application_panel_embed
 
 CFG = dict(leader_role_id=1, dep_leader_role_id=2, high_staff_role_id=3,
-           recruiter_role_id=4, accepted_role_id=5, colombo_role_id=6)
+           recruiter_role_id=4, accepted_role_id=5, colombo_role_id=6, guest_role_id=7)
 
 def member(rank_ids, admin=False, uid=10, guild=None):
     return SimpleNamespace(id=uid, guild=guild or SimpleNamespace(owner_id=999),
@@ -14,14 +14,14 @@ def member(rank_ids, admin=False, uid=10, guild=None):
 
 class RolePolicy(unittest.IsolatedAsyncioTestCase):
     def test_hierarchy_access_matrix(self):
-        for rank in range(1,7):
+        for rank in range(1,8):
             m=member([rank],admin=True)
             self.assertEqual(bool(may_recruit(m,CFG)),rank in (1,2,3,4))
             self.assertEqual(bool(may_review_reports(m,CFG)),rank in (1,2,3,4))
             self.assertEqual(bool(may_promote(m,CFG)),rank in (1,2,3,4))
             self.assertEqual(bool(may_review_vacation(m,CFG)),rank in (1,2,3))
             self.assertEqual(bool(may_manage_recruiters(m,CFG)),rank in (1,2,3))
-            self.assertEqual(bool(is_family(m,CFG)),rank!=6)
+            self.assertEqual(bool(is_family(m,CFG)),rank!=7)
         self.assertTrue(may_recruit(member([],admin=True,uid=999),CFG))
         self.assertTrue(may_recruit(member([2,4]),CFG))
 
@@ -46,11 +46,11 @@ class RolePolicy(unittest.IsolatedAsyncioTestCase):
         guild=SimpleNamespace(roles=[role(1),role(2)])
         with self.assertRaises(ValueError): named_role(guild,'leader_role_id')
 
-    async def test_join_grants_colombo_only(self):
+    async def test_join_grants_guest_only(self):
         from bot.core import ColomboBot
-        role=SimpleNamespace(id=6)
+        role=SimpleNamespace(id=7)
         bot=SimpleNamespace(db=SimpleNamespace(get_config=AsyncMock(return_value=CFG)))
-        guild=SimpleNamespace(id=100,get_role=lambda rid:role if rid==6 else None)
+        guild=SimpleNamespace(id=100,get_role=lambda rid:role if rid==7 else None)
         user=SimpleNamespace(bot=False,guild=guild,add_roles=AsyncMock())
         await ColomboBot.on_member_join(bot,user)
         self.assertEqual(user.add_roles.call_args.args,(role,))
