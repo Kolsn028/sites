@@ -47,3 +47,15 @@ class Membership(unittest.IsolatedAsyncioTestCase):
         g,r,cfg=self.environment();g.owner_id=1000
         guest,_=self.member(g,{1});family,_=self.member(g,{2})
         self.assertFalse(is_family(guest,cfg));self.assertTrue(is_family(family,cfg))
+
+    async def test_unclaimed_invites_only_recruiters_without_senior_roles(self):
+        g,r,cfg=self.environment()
+        cfg.update(recruiter_role_id=20,high_staff_role_id=21,dep_leader_role_id=22,leader_role_id=23)
+        def person(uid, ids):
+            return NS(id=uid,bot=False,guild=NS(owner_id=9999),get_role=lambda rid:rid if rid in ids else None)
+        people=[person(100,{20}),person(101,{20,21}),person(102,{20,22}),person(103,{20,23})]
+        g.get_role=lambda rid:NS(members=people) if rid==20 else None
+        thread=NS(guild=g,fetch_members=AsyncMock(return_value=[]),remove_user=AsyncMock(),add_user=AsyncMock())
+        bot=NS(user=NS(id=999),db=NS(get_config=AsyncMock(return_value=cfg)))
+        await sync_application_members(bot,thread,{'applicant_id':10,'assigned_to':None})
+        self.assertEqual({c.args[0].id for c in thread.add_user.call_args_list},{10,100})

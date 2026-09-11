@@ -36,7 +36,7 @@ def serialized(kind, by_user=False):
         return wrapped
     return decorate
 
-async def private_thread(parent, member, roles, name):
+async def private_thread(parent, member, roles, name, *, reviewers=None):
     """No public anchor: application text stays inside the private thread."""
     perms = parent.permissions_for(parent.guild.me)
     required = ('view_channel', 'send_messages', 'create_private_threads', 'manage_threads',
@@ -51,8 +51,9 @@ async def private_thread(parent, member, roles, name):
                                        invitable=False, auto_archive_duration=1440, reason='Colombo: приватная заявка')
     try:
         await thread.add_user(member)
-        reviewers = {m.id: m for role in roles if role for m in role.members if not m.bot}
-        for reviewer in reviewers.values():
+        invited = ({m.id: m for m in reviewers if not m.bot} if reviewers is not None else
+                   {m.id: m for role in roles if role for m in role.members if not m.bot})
+        for reviewer in invited.values():
             if reviewer.id != member.id:
                 await thread.add_user(reviewer)
     except Exception:

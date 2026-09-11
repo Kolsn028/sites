@@ -1,6 +1,6 @@
 """Separate guest onboarding from family membership and application access."""
 import discord
-from .roles import STAFF_KEYS, configured_roles
+from .roles import application_recruiters
 
 
 def membership_roles(guild, cfg):
@@ -66,8 +66,7 @@ async def sync_application_members(bot, thread, app):
     if app.get('assigned_to'):
         allowed.add(app['assigned_to'])
     else:
-        allowed.update(m.id for role in configured_roles(thread.guild, cfg, STAFF_KEYS)
-                       for m in role.members if not m.bot)
+        allowed.update(m.id for m in application_recruiters(thread.guild, cfg))
     for current in await thread.fetch_members():
         if current.id not in allowed:
             await thread.remove_user(discord.Object(id=current.id))

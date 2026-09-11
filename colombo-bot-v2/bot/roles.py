@@ -84,8 +84,11 @@ async def notify_people(channel, people, embed):
     return first
 
 
-async def notify_recruiters(channel, guild, cfg, embed):
+def application_recruiters(guild, cfg):
     role = guild.get_role(cfg.get('recruiter_role_id') or 0)
-    people = [m for m in role.members if not m.bot and not is_leader(m, cfg)
-              and not has_role(m, cfg, ('dep_leader_role_id',))] if role else []
-    return await notify_people(channel, people, embed)
+    return [m for m in role.members if not m.bot and not is_leader(m, cfg)
+            and not has_role(m, cfg, HIGH_KEYS)] if role else []
+
+
+async def notify_recruiters(channel, guild, cfg, embed):
+    return await notify_people(channel, application_recruiters(guild, cfg), embed)

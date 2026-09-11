@@ -26,7 +26,7 @@ class RolePolicy(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(may_recruit(member([2,4]),CFG))
 
     async def test_recruit_notifications_exclude_leader_and_deputy_with_recruit_role(self):
-        people=[member([4],uid=10),member([1,4],uid=11),member([2,4],uid=12)]
+        people=[member([4],uid=10),member([1,4],uid=11),member([2,4],uid=12),member([3,4],uid=13)]
         role=SimpleNamespace(members=people)
         guild=SimpleNamespace(get_role=lambda rid: role if rid==4 else None)
         channel=SimpleNamespace(send=AsyncMock())

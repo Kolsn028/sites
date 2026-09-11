@@ -9,7 +9,7 @@ import discord
 
 from .ui import base_embed, activity_type_label
 from .recruiting import update_assignment_card, interview_room
-from .roles import configured_roles, STAFF_KEYS, HIGH_KEYS, notify_recruiters, notify_assistants
+from .roles import configured_roles, STAFF_KEYS, HIGH_KEYS, notify_recruiters, notify_assistants, application_recruiters
 from .interactions import SafeModal, SafeView, serialized, private_thread
 
 
@@ -68,9 +68,12 @@ class ApplicationModal(SafeModal, title="Подать заявку"):
             updated_at=now,
         )
 
+        if not interaction.guild.chunked:
+            await interaction.guild.chunk(cache=True)
         try:
-            thread = await private_thread(parent, interaction.user, configured_roles(interaction.guild, cfg, STAFF_KEYS),
-                                          f"заявка-{app_id}-{interaction.user.display_name}")
+            thread = await private_thread(parent, interaction.user, [],
+                                          f"заявка-{app_id}-{interaction.user.display_name}",
+                                          reviewers=application_recruiters(interaction.guild, cfg))
         except Exception:
             await self.bot.db.update_application(app_id, status="failed", updated_at=self.bot.now_iso())
             raise
@@ -92,7 +95,8 @@ class ApplicationModal(SafeModal, title="Подать заявку"):
             await thread.delete(reason="Colombo: не удалось отправить анкету")
             raise
 
-        log = await notify_recruiters(log_ch, interaction.guild, cfg, base_embed(f"📥 Новая заявка #{app_id}", f"{interaction.user.mention}\nВетка: {thread.mention}"))
+        await notify_recruiters(thread, interaction.guild, cfg, base_embed("📥 Новая заявка", "Рекруты, возьмите заявку на проверку."))
+        log = await log_ch.send(allowed_mentions=discord.AllowedMentions.none(), embed=base_embed(f"📥 Новая заявка #{app_id}", f"{interaction.user.mention}\nВетка: {thread.mention}"))
         await self.bot.db.update_application(app_id, log_message_id=log.id)
         await interaction.followup.send(f"✅ Заявка **#{app_id}** отправлена: {thread.mention}", ephemeral=True)
 
