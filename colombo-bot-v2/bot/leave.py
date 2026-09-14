@@ -19,33 +19,44 @@ def removable_roles(member, cfg):
 async def begin_leave(bot, guild, vac):
     member = await guild.fetch_member(vac['member_id'])
     cfg = await bot.db.get_config(guild.id)
-    novice = guild.get_role(cfg.get('accepted_role_id') or 0)
-    leave = guild.get_role(cfg.get('vacation_role_id') or 0)
-    if not novice or not leave or novice >= guild.me.top_role or leave >= guild.me.top_role:
-        raise ValueError('Подними роль бота выше -Novizio- и Отдых.')
     if vac.get('role_snapshot') is None:
-        remove = removable_roles(member, cfg)
-        if any(r >= guild.me.top_role for r in remove):
-            raise ValueError('Бот не может снять одну из ролей. Подними его роль выше Recruit-.')
-        snapshot = [{'id': r.id, 'name': r.name, 'permissions': r.permissions.value} for r in remove]
-        await bot.db.update_vacation(vac['id'], role_snapshot=json.dumps(snapshot,ensure_ascii=False),
-            added_novice=int(not member.get_role(novice.id)),status='applying',updated_at=bot.now_iso())
+        leave = guild.get_role(cfg.get('vacation_role_id') or 0)
+        if not leave or leave.managed or leave.is_default() or leave >= guild.me.top_role:
+            raise ValueError('Проверь роль Отдых и подними роль бота выше неё.')
+        # Persist the exact leave role before Discord writes, so retries and a
+        # later /setup change cannot remove a different role on return.
+        marker = {'mode': 'role_only', 'leave_role_id': leave.id}
+        await bot.db.update_vacation(vac['id'], role_snapshot=json.dumps(marker),
+            added_novice=0, status='applying', updated_at=bot.now_iso())
         vac = await bot.db.get_vacation(vac['id'])
-    await member.add_roles(novice, leave, reason='Colombo: одобрен отдых')
-    for saved in json.loads(vac['role_snapshot']):
-        role = guild.get_role(saved['id'])
-        if role and member.get_role(role.id):
-            if role.managed or role >= guild.me.top_role or role > guild.get_role(cfg['recruiter_role_id']):
-                raise ValueError(f'Не удалось снять {role.name}. Заявка сохранена для повторной попытки.')
-            await member.remove_roles(role, reason='Colombo: роль сохранена до восстановления')
-    await bot.db.update_vacation(vac['id'],status='approved',updated_at=bot.now_iso())
+    snapshot = json.loads(vac['role_snapshot'])
+    role_id = snapshot['leave_role_id'] if isinstance(snapshot, dict) and snapshot.get('mode') == 'role_only' else cfg.get('vacation_role_id')
+    leave = guild.get_role(role_id or 0)
+    if not leave or leave.managed or leave.is_default() or leave >= guild.me.top_role:
+        raise ValueError('Проверь роль Отдых и подними роль бота выше неё.')
+    # Legacy snapshots are retained for eventual restoration; never remove
+    # additional roles, even when retrying an old partially approved leave.
+    await member.add_roles(leave, reason='Colombo: одобрен отдых')
+    await bot.db.update_vacation(vac['id'], status='approved', updated_at=bot.now_iso())
 
 
 async def restore_leave(bot, guild, vac):
     if vac.get('role_snapshot') is None:
-        raise ValueError('Снимок ролей отсутствует. Сначала перенеси этот отпуск через /setup; роли нельзя угадывать.')
+        raise ValueError('Снимок ролей отсутствует. Руководству нужно вручную проверить ранее снятые роли; они не будут угаданы.')
     member = await guild.fetch_member(vac['member_id'])
     cfg = await bot.db.get_config(guild.id)
+    snapshot = json.loads(vac['role_snapshot'])
+    if isinstance(snapshot, dict):
+        if snapshot.get('mode') != 'role_only':
+            raise ValueError('Неизвестный формат отпуска. Нужна проверка руководства.')
+        leave = guild.get_role(snapshot['leave_role_id'])
+        if leave and (leave.managed or leave.is_default() or leave >= guild.me.top_role):
+            raise ValueError('Проверь положение роли бота относительно Отдых.')
+        await bot.db.update_vacation(vac['id'], status='restoring', updated_at=bot.now_iso())
+        if leave:
+            await member.remove_roles(leave, reason='Colombo: возвращение из отпуска одобрено')
+        await bot.db.update_vacation(vac['id'], status='returned', updated_at=bot.now_iso())
+        return
     saved_roles=[]
     for saved in json.loads(vac['role_snapshot']):
         role=guild.get_role(saved['id'])
@@ -110,11 +121,11 @@ class ReturnDecisionView(SafeView):
             else:await self.bot.db.update_vacation(vac['id'],status='approved',updated_at=self.bot.now_iso())
             await i.message.edit(embed=base_embed('✅ Восстановлен' if approve else '❌ Восстановление отклонено',
                 f"Участник: <@{vac['member_id']}>\nРешение: {i.user.mention}\n"+
-                ('Сохранённые роли возвращены.' if approve else 'Отдых продолжается. Можно подать новую заявку.'),0x3BAA72 if approve else 0xD64045),view=None,allowed_mentions=discord.AllowedMentions.none())
+                ('Возвращение одобрено, роль отдыха снята.' if approve else 'Отдых продолжается. Можно подать новую заявку.'),0x3BAA72 if approve else 0xD64045),view=None,allowed_mentions=discord.AllowedMentions.none())
             await self.bot.update_vacation_status(i.guild)
             await i.followup.send('Решение сохранено.',ephemeral=True)
             await i.channel.edit(archived=True,locked=True)
-    @discord.ui.button(label='Восстановить роли',style=discord.ButtonStyle.success,custom_id='colombo:return:approve')
+    @discord.ui.button(label='Одобрить возвращение',style=discord.ButtonStyle.success,custom_id='colombo:return:approve')
     async def approve(self,i,_):await self.decide(i,True)
     @discord.ui.button(label='Отклонить',style=discord.ButtonStyle.danger,custom_id='colombo:return:reject')
     async def reject(self,i,_):await self.decide(i,False)

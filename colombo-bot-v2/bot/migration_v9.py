@@ -2,7 +2,6 @@
 import discord
 from .events import EventView, card
 from .profiles import refresh_member
-from .leave import begin_leave
 
 
 async def migrate_guild(bot,guild):
@@ -26,11 +25,7 @@ async def migrate_guild(bot,guild):
             await msg.edit(embed=await card(bot.db,row),view=view,allowed_mentions=discord.AllowedMentions.none())
         except discord.NotFound:
             print(f'Old event message missing: {row["id"]}; database retained')
-    # Apply the new leave rule once, capturing roles still present before removing them.
-    for vac in await bot.db.active_vacations(guild.id):
-        if vac['role_snapshot'] is None and vac['status']=='approved':
-            async with bot.operation_locks[('leave',guild.id,vac['member_id'])]:
-                await begin_leave(bot,guild,vac)
+    # Missing legacy role snapshots cannot be reconstructed from current roles.
     ids={r['member_id'] for r in await bot.db._all('SELECT member_id FROM personal_cases WHERE guild_id=?',(guild.id,))}
     ids.update(r['member_id'] for r in await bot.db._all('''SELECT DISTINCT s.member_id FROM event_signups s
         JOIN family_events e ON e.id=s.event_id WHERE e.guild_id=?''',(guild.id,)))
