@@ -39,9 +39,9 @@ class Upgrade(unittest.IsolatedAsyncioTestCase):
     async def test_leave_and_return_exact_roles_and_no_auto_expiry(self):
         original={r.id for r in self.held}
         await begin_leave(self.bot,self.guild,await self.db.get_vacation(self.vid))
-        self.assertEqual({r.id for r in self.held},{0,3,4,20,30,40})
+        self.assertEqual({r.id for r in self.held},original | {3})
         snapshot=(await self.db.get_vacation(self.vid))['role_snapshot']
-        self.assertEqual({r['id'] for r in json.loads(snapshot)},{1,2,5,10})
+        self.assertEqual(json.loads(snapshot),{'mode':'role_only','leave_role_id':3})
         from bot.core import ColomboBot
         self.bot.update_vacation_status=AsyncMock()
         await ColomboBot.expire_vacations(self.bot,self.guild)
@@ -50,17 +50,17 @@ class Upgrade(unittest.IsolatedAsyncioTestCase):
         await restore_leave(self.bot,self.guild,await self.db.get_vacation(self.vid))
         self.assertEqual({r.id for r in self.held},original)
         self.assertEqual((await self.db.get_vacation(self.vid))['status'],'returned')
-    async def test_failed_removal_snapshot_survives_retry(self):
-        saved=self.member.remove_roles.side_effect
-        self.member.remove_roles.side_effect=discord.DiscordException('fail')
+    async def test_failed_addition_marker_survives_retry(self):
+        saved=self.member.add_roles.side_effect
+        self.member.add_roles.side_effect=discord.DiscordException('fail')
         with self.assertRaises(discord.DiscordException):await begin_leave(self.bot,self.guild,await self.db.get_vacation(self.vid))
         vac=await self.db.get_vacation(self.vid);snap=vac['role_snapshot']
         self.assertEqual(vac['status'],'applying');self.assertIsNotNone(snap)
-        self.member.remove_roles.side_effect=saved
+        self.member.add_roles.side_effect=saved
         await begin_leave(self.bot,self.guild,vac)
         self.assertEqual((await self.db.get_vacation(self.vid))['role_snapshot'],snap)
     async def test_changed_or_deleted_role_blocks_restore_before_grant(self):
-        await begin_leave(self.bot,self.guild,await self.db.get_vacation(self.vid))
+        await self.db.update_vacation(self.vid,role_snapshot=json.dumps([{'id':5,'permissions':0,'name':'main'}]),added_novice=0,status='approved')
         self.roles[5].permissions=discord.Permissions(administrator=True)
         self.member.add_roles.reset_mock()
         with self.assertRaises(ValueError):await restore_leave(self.bot,self.guild,await self.db.get_vacation(self.vid))
