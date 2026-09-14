@@ -24,6 +24,9 @@ class ColomboBot(commands.Bot):
 
     async def setup_hook(self):
         await self.db.connect()
+        from .discord_backup import DiscordBackups
+        self.backups = DiscordBackups(self)
+        await self.backups.restore()
         from .views import ApplicationPanelView,RecruiterActionView,VacationPanelView,VacationDecisionView,CasePanelView,ActivityClassifyView,ActivityReviewView
         for view in (ApplicationPanelView(self),RecruiterActionView(self),VacationPanelView(self),VacationDecisionView(self),CasePanelView(self),ActivityClassifyView(self),ActivityReviewView(self)):
             self.add_view(view)
@@ -43,6 +46,7 @@ class ColomboBot(commands.Bot):
             else: await self.tree.sync()
         except Exception as e: print("Slash sync error:",e)
         await self._start_health(); self.housekeeping.start()
+        self.backups.watch_commits()
 
     async def _start_health(self):
         async def health(_): return web.json_response({"ok":True,"guilds":len(self.guilds)})
@@ -52,6 +56,8 @@ class ColomboBot(commands.Bot):
     async def close(self):
         if self.housekeeping.is_running(): self.housekeeping.cancel()
         if self.health_runner: await self.health_runner.cleanup()
+        if hasattr(self, 'backups'):
+            await self.backups.close()
         await self.db.close(); await super().close()
 
     async def on_ready(self):
@@ -78,6 +84,15 @@ class ColomboBot(commands.Bot):
                 import traceback
                 traceback.print_exc()
                 print(f'Colombo layout migration incomplete: {type(exc).__name__}: {exc}')
+
+        for guild in self.guilds:
+            cfg = await self.db.get_config(guild.id)
+            if cfg.get('management_category_id'):
+                try:
+                    await self.backups.save(guild)
+                except Exception as exc:
+                    self.backups.errors[guild.id] = str(exc)
+                    print(f'Discord backup initial save failed | guild={guild.id}: {exc}')
 
     async def sync_guild_commands(self, guild):
         async with self.operation_locks[('commands', guild.id)]:

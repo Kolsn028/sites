@@ -348,7 +348,7 @@ class VacationDecisionView(SafeView):
             if vac['status'] not in ('pending','applying'):
                 return await interaction.followup.send('Заявка уже обработана.',ephemeral=True)
             if vac['status']=='applying' and not approve:
-                return await interaction.followup.send('Снятие ролей уже начато. Повтори одобрение для завершения.',ephemeral=True)
+                return await interaction.followup.send('Оформление отдыха уже начато. Повтори одобрение для завершения.',ephemeral=True)
             if approve:
                 from .leave import begin_leave
                 await begin_leave(self.bot,interaction.guild,vac)
