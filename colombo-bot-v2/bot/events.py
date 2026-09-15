@@ -14,13 +14,17 @@ def may_manage_events(member, cfg):
     return is_leader(member, cfg) or bool(has_role(member, cfg, HIGH_KEYS))
 
 
-def parse_time(value):
+def parse_time(value,day=None,now=None):
+    zone=timezone(timedelta(hours=3));now=(now or datetime.now(timezone.utc)).astimezone(zone)
     try:
-        dt = datetime.strptime(value.strip(), '%d.%m.%Y %H:%M').replace(tzinfo=timezone(timedelta(hours=3)))
+        if day is None:
+            dt=datetime.strptime(value.strip(), '%d.%m.%Y %H:%M').replace(tzinfo=zone)
+        else:
+            clock=datetime.strptime(value.strip(), '%H:%M').time()
+            dt=datetime.combine(day,clock,tzinfo=zone)
     except ValueError:
-        raise ValueError('Дата: ДД.ММ.ГГГГ ЧЧ:ММ, время московское (UTC+3).')
-    if dt <= datetime.now(timezone.utc):
-        raise ValueError('Укажи будущую дату и время.')
+        raise ValueError('Укажи время ЧЧ:ММ, например 20:00, или полную дату в режиме «Другая дата». Время московское.')
+    if dt<=now:raise ValueError('Это время уже прошло. Выбери другое время или завтра.')
     return int(dt.timestamp())
 
 
@@ -56,12 +60,19 @@ class CreateEventModal(SafeModal, title='Создать сбор • Colombo'):
     limit_input = discord.ui.TextInput(label='Количество мест (1–100)', default='35', max_length=3)
     reserve_input = discord.ui.TextInput(label='Мест в резерве (всего до 100)',default='10',max_length=2)
     details_input = discord.ui.TextInput(label='Место встречи / требования', style=discord.TextStyle.paragraph,required=False,max_length=700)
-    def __init__(self, bot, kind):
-        super().__init__(); self.bot=bot; self.kind=kind
+    def __init__(self, bot, kind, day=None, template=None):
+        super().__init__(); self.bot=bot; self.kind=kind;self.day=day
+        if day is not None:
+            self.date_input.label='Время по Москве • '+day.strftime('%d.%m')
+            self.date_input.placeholder='20:00'
+        if template:
+            self.limit_input.default=str(template['capacity'])
+            self.reserve_input.default=str(template['reserve_capacity'])
+            self.details_input.default=template.get('details') or '' 
     async def on_submit(self, i):
         if not await allowed(self.bot,i):
             return await i.response.send_message('Создают только High, Deputy Leader и Leader.',ephemeral=True)
-        ts=parse_time(str(self.date_input))
+        ts=parse_time(str(self.date_input),self.day)
         try: capacity=int(str(self.limit_input))
         except ValueError: raise ValueError('Количество мест — целое число от 1 до 100.')
         if not 1 <= capacity <= 100: raise ValueError('Количество мест — от 1 до 100.')
@@ -103,7 +114,7 @@ class EventPanelView(SafeView):
         cfg=await self.bot.db.get_config(i.guild_id)
         kind=next((k for k in EVENTS if cfg.get(f'{k}_panel_channel_id')==i.channel_id),None)
         if not kind: raise ValueError('Канал не настроен: /setup.')
-        await i.response.send_modal(CreateEventModal(self.bot,kind))
+        await choose_day(self.bot,i,kind)
 
 
 class AttendanceSelect(discord.ui.UserSelect):
@@ -251,3 +262,31 @@ class RosterManageView(SafeView):
             msg=await i.channel.fetch_message(self.message_id)
             await msg.edit(embed=await card(self.bot.db,row),view=view,allowed_mentions=discord.AllowedMentions.none())
             await i.followup.send('Сбор завершён. Подтверждение присутствия доступно в управлении.',ephemeral=True)
+
+    @discord.ui.button(label='Повторить сбор',emoji='🔁',row=3)
+    async def repeat(self,i,_):
+        if not await allowed(self.bot,i):return await i.response.send_message('Повторяют сбор High и выше.',ephemeral=True)
+        row=await event_row(self.bot,i.guild_id,self.message_id)
+        if not row:return await i.response.send_message('Исходный сбор не найден.',ephemeral=True)
+        await choose_day(self.bot,i,row['kind'],row)
+
+
+async def choose_day(bot,i,kind,template=None):
+    if not await allowed(bot,i):return await i.response.send_message('Создают сборы High и выше.',ephemeral=True)
+    if template is None:
+        template=await bot.db._one('SELECT * FROM family_events WHERE guild_id=? AND kind=? AND message_id IS NOT NULL ORDER BY id DESC LIMIT 1',(i.guild_id,kind))
+    await i.response.send_message('Когда сбор? Время указывается по Москве. Места и описание можно изменить в форме.',view=DayView(bot,kind,template),ephemeral=True)
+
+
+class DayView(SafeView):
+    def __init__(self,bot,kind,template):super().__init__(timeout=300);self.bot=bot;self.kind=kind;self.template=template
+    async def open(self,i,offset):
+        if not await allowed(self.bot,i):return await i.response.send_message('Только High и выше.',ephemeral=True)
+        day=None if offset is None else datetime.now(timezone(timedelta(hours=3))).date()+timedelta(days=offset)
+        await i.response.send_modal(CreateEventModal(self.bot,self.kind,day,self.template))
+    @discord.ui.button(label='Сегодня',style=discord.ButtonStyle.success)
+    async def today(self,i,_):await self.open(i,0)
+    @discord.ui.button(label='Завтра',style=discord.ButtonStyle.primary)
+    async def tomorrow(self,i,_):await self.open(i,1)
+    @discord.ui.button(label='Другая дата')
+    async def other(self,i,_):await self.open(i,None)

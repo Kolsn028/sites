@@ -180,6 +180,17 @@ def register_commands(bot):
         except Exception as exc:
             await i.followup.send(f"Копия НЕ подтверждена: {exc}. Не перезапускай бота до успешного сохранения.", ephemeral=True)
 
+    @bot.tree.command(name='management',description='Открыть панель High')
+    async def management(i:discord.Interaction):
+        from .dashboard import high,ManagementView
+        if not await high(bot,i):return await i.response.send_message('Только High и выше.',ephemeral=True)
+        await i.response.send_message('Управление Colombo',view=ManagementView(bot),ephemeral=True)
+
+    @bot.tree.command(name='my_requests',description='Статусы моих заявок и обращений')
+    async def my_requests(i:discord.Interaction):
+        from .dashboard import open_requests
+        await open_requests(bot,i,own=True)
+
     for command in bot.tree.get_commands():
         command.guild_only = True
 

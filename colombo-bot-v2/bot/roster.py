@@ -27,7 +27,7 @@ async def join(db,event_id,member_id,leave=False,seat='main'):
         if current:return 'Ты уже записан.'
         cap=event['capacity'] if seat=='main' else event['reserve_capacity']
         count=await db._one('SELECT COUNT(*) n FROM event_signups WHERE event_id=? AND seat=?',(event_id,seat))
-        if count['n']>=cap:return 'Все места заняты.'
+        if count['n']>=cap:return 'Основа заполнена — нажми «В резерв».' if seat=='main' else 'Резерв заполнен. Дождись свободного места или обратись к организатору.'
         await db.conn.execute('INSERT INTO event_signups(event_id,member_id,joined_at,seat) VALUES (?,?,?,?)',
             (event_id,member_id,datetime.now(timezone.utc).isoformat(),seat))
         await db.conn.commit();return 'Ты записан!' if seat=='main' else 'Ты записан в резерв!'
@@ -73,3 +73,4 @@ async def confirm(db,event_id,member_id,actor):
         await db.conn.execute('UPDATE event_signups SET attended=?,confirmed_by=?,confirmed_at=? WHERE event_id=? AND member_id=?',
             (value,actor,now,event_id,member_id))
         await audit(db,event['guild_id'],actor,'attendance',member_id,{'event':event_id,'confirmed':value});await db.conn.commit()
+
