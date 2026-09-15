@@ -28,10 +28,14 @@ async def award_tier(guild,member,tier):
 
 class TierModal(SafeModal):
     identity=discord.ui.TextInput(label='Ник / возраст / статик',placeholder='Nickname / 23 / 4949',max_length=150)
-    gg=discord.ui.TextInput(label='Откаты с ГГ',placeholder='Ссылки: сайга + спец, от 7 минут',style=discord.TextStyle.paragraph,max_length=900)
-    majestic=discord.ui.TextInput(label='Откаты с Маджестика',placeholder='Ссылки, если есть откаты',style=discord.TextStyle.paragraph,required=False,max_length=900)
+    gg=discord.ui.TextInput(label='Откаты с ГГ',placeholder='Откаты с ГГ (спешики + сайга, от 8 людей в лобаке, онли 18 и 19 сервер)',style=discord.TextStyle.paragraph,max_length=900)
+    kapt=discord.ui.TextInput(label='Откаты с Каптов',placeholder='Ссылки на откаты с Каптов',style=discord.TextStyle.paragraph,max_length=900)
     purpose=discord.ui.TextInput(label='Для чего тебе нужен тир?',style=discord.TextStyle.paragraph,max_length=600)
-    def __init__(self,bot,tier):super().__init__(title=f'Заявка на тир {tier}',timeout=300);self.bot=bot;self.tier=tier
+    def __init__(self,bot,tier):
+        super().__init__(title=f'Заявка на тир {tier}',timeout=300);self.bot=bot;self.tier=tier
+        mcl_required=tier in (1,2)
+        self.mcl=discord.ui.TextInput(label='Откаты с МЦЛ',placeholder='Ссылки на откаты с МЦЛ' if mcl_required else 'Ссылки, если есть откаты',style=discord.TextStyle.paragraph,required=mcl_required,max_length=900)
+        self.add_item(self.mcl)
     async def on_submit(self,i):
         if i.guild_id!=GUILD_ID or not isinstance(i.user,discord.Member) or not await self.bot.is_family_member(i.user):return await i.response.send_message('Заявки доступны участникам Colombo.',ephemeral=True)
         await i.response.defer(ephemeral=True)
@@ -43,7 +47,7 @@ class TierModal(SafeModal):
             cfg=await self.bot.db.get_config(i.guild_id);high=configured_roles(i.guild,cfg,HIGH_KEYS)
             if len(high)!=3:raise ValueError('Не настроены High, Deputy Leader или Leader.')
             thread=await private_thread(i.channel,i.user,high,f'тир-{self.tier}-{i.user.display_name}')
-            fields=[('Ник / возраст / статик',str(self.identity)),('Откаты с ГГ',str(self.gg)),('Откаты с Маджестика',str(self.majestic) or 'Не приложены'),('Для чего нужен тир',str(self.purpose))]
+            fields=[('Ник / возраст / статик',str(self.identity)),('Откаты с ГГ',str(self.gg)),('Откаты с Каптов',str(self.kapt)),('Откаты с МЦЛ',str(self.mcl) or 'Не приложены'),('Для чего нужен тир',str(self.purpose))]
             try:
                 async with self.bot.db.lock:
                     cur=await self.bot.db.conn.execute('INSERT INTO progress_requests(guild_id,member_id,kind,thread_id,details,created_at) VALUES (?,?,?,?,?,?)',(i.guild_id,i.user.id,f'tier_{self.tier}',thread.id,json.dumps(fields,ensure_ascii=False),self.bot.now_iso()));rid=cur.lastrowid;await self.bot.db.conn.commit()
