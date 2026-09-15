@@ -8,6 +8,8 @@ async def report_error(interaction, error):
     log.error('Discord interaction failed', exc_info=(type(error), error, error.__traceback__))
     if isinstance(error, discord.Forbidden):
         message = 'Не хватает прав. Нужны просмотр канала, отправка сообщений, создание приватных веток и управление ветками. Проверь также положение роли бота.'
+    elif isinstance(error, discord.NotFound):
+        message = "Сообщение или канал удалён. Открой актуальную панель; если её нет — сообщи High."
     elif isinstance(error, ValueError):
         message = str(error)
     else:
@@ -61,3 +63,4 @@ async def private_thread(parent, member, roles, name, *, reviewers=None):
         await thread.delete(reason='Colombo: не удалось добавить участников')
         raise
     return thread
+

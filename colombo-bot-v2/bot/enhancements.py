@@ -143,7 +143,7 @@ async def refresh_interface(bot,guild):
     from .ui import vacation_panel_embed
     cfg=await bot.db.get_config(guild.id)
     from .progression import contract_panel_embed,promotion_panel_embed
-    for kind in (*EVENTS,'vacation','contract','promotion'):
+    for kind in (*EVENTS,'application','vacation','contract','promotion'):
         cid=cfg.get(f'{kind}_panel_channel_id');mid=cfg.get(f'{kind}_panel_message_id')
         if not cid or not mid: continue
         try:
@@ -151,6 +151,9 @@ async def refresh_interface(bot,guild):
             msg=await ch.fetch_message(mid)
             if msg.author.id!=bot.user.id: continue
             kwargs={'embed':event_panel(kind),'view':EventPanelView(bot)} if kind in EVENTS else {'embed':vacation_panel_embed()}
+            if kind=='application':
+                from .views import ApplicationPanelView
+                kwargs={'view':ApplicationPanelView(bot)}
             if kind=='contract': kwargs={'embed':contract_panel_embed()}
             if kind=='promotion': kwargs={'embed':promotion_panel_embed()}
             await msg.edit(**kwargs,allowed_mentions=discord.AllowedMentions.none())
@@ -167,4 +170,6 @@ async def refresh_interface(bot,guild):
         except discord.NotFound: continue
     for case in await bot.db._all('SELECT member_id FROM personal_cases WHERE guild_id=?',(guild.id,)):
         await refresh_member(bot,guild,case['member_id'],create=False)
+    from .dashboard import install_hub
+    await install_hub(bot,guild)
     print(f'Interface refreshed | guild={guild.id}')

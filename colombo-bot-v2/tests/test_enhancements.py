@@ -72,4 +72,4 @@ class Improvements(unittest.IsolatedAsyncioTestCase):
         ids={c.custom_id for c in EventView(None).children}
         self.assertEqual(ids,{'colombo:event:join','colombo:event:reserve','colombo:event:leave','colombo:event:manage'})
         self.assertEqual(len(EventView(None,legacy=True).children),6)
-        self.assertEqual(len(RosterManageView(None,1).children),5)
+        self.assertEqual(len(RosterManageView(None,1).children),6)

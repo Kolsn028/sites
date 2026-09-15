@@ -16,7 +16,7 @@ class Events(unittest.IsolatedAsyncioTestCase):
     async def test_concurrent_last_place_duplicate_and_leave(self):
         results=await asyncio.gather(*(signup(self.db,1,uid) for uid in (10,10,20,30)))
         self.assertEqual(results.count('Ты записан!'),2)
-        self.assertIn('Ты уже записан.',results);self.assertIn('Все места заняты.',results)
+        self.assertIn('Ты уже записан.',results);self.assertIn('Основа заполнена — нажми «В резерв».',results)
         await signup(self.db,1,10,True);self.assertEqual(await signup(self.db,1,30),'Ты записан!')
         await self.db.close();await self.db.connect()
         self.assertEqual(len(await self.db._all('SELECT * FROM event_signups')),2)
@@ -48,3 +48,4 @@ class Events(unittest.IsolatedAsyncioTestCase):
     def test_date_validation(self):
         with self.assertRaises(ValueError):parse_time('01.01.2020 12:00')
         with self.assertRaises(ValueError):parse_time('31.02.2030 12:00')
+

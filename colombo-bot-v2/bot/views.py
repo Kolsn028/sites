@@ -110,6 +110,11 @@ class ApplicationPanelView(SafeView):
     async def open_application(self, interaction: discord.Interaction, _button):
         await interaction.response.send_modal(ApplicationModal(self.bot))
 
+    @discord.ui.button(label="Мои заявки",emoji="📬",style=discord.ButtonStyle.secondary,custom_id="colombo:application:mine")
+    async def mine(self,interaction,_button):
+        from .dashboard import open_requests
+        await open_requests(self.bot,interaction,own=True)
+
 
 class RecruiterActionSelect(discord.ui.Select):
     def __init__(self, bot):

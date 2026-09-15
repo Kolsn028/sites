@@ -27,6 +27,8 @@ class ColomboBot(commands.Bot):
         from .discord_backup import DiscordBackups
         self.backups = DiscordBackups(self)
         await self.backups.restore()
+        from .dashboard import ManagementView
+        self.add_view(ManagementView(self))
         from .views import ApplicationPanelView,RecruiterActionView,VacationPanelView,VacationDecisionView,CasePanelView,ActivityClassifyView,ActivityReviewView
         for view in (ApplicationPanelView(self),RecruiterActionView(self),VacationPanelView(self),VacationDecisionView(self),CasePanelView(self),ActivityClassifyView(self),ActivityReviewView(self)):
             self.add_view(view)
