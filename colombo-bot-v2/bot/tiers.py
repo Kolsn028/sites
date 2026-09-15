@@ -30,12 +30,13 @@ class TierModal(SafeModal):
     identity=discord.ui.TextInput(label='Ник / возраст / статик',placeholder='Nickname / 23 / 4949',max_length=150)
     gg=discord.ui.TextInput(label='Откаты с ГГ',placeholder='Откаты с ГГ (спешики + сайга, от 8 людей в лобаке, онли 18 и 19 сервер)',style=discord.TextStyle.paragraph,max_length=900)
     kapt=discord.ui.TextInput(label='Откаты с Каптов',placeholder='Ссылки на откаты с Каптов',style=discord.TextStyle.paragraph,max_length=900)
-    purpose=discord.ui.TextInput(label='Для чего тебе нужен тир?',style=discord.TextStyle.paragraph,max_length=600)
     def __init__(self,bot,tier):
         super().__init__(title=f'Заявка на тир {tier}',timeout=300);self.bot=bot;self.tier=tier
         mcl_required=tier in (1,2)
         self.mcl=discord.ui.TextInput(label='Откаты с МЦЛ',placeholder='Ссылки на откаты с МЦЛ' if mcl_required else 'Ссылки, если есть откаты',style=discord.TextStyle.paragraph,required=mcl_required,max_length=900)
         self.add_item(self.mcl)
+        self.purpose=discord.ui.TextInput(label='Для чего тебе нужен тир?',style=discord.TextStyle.paragraph,max_length=600)
+        self.add_item(self.purpose)
     async def on_submit(self,i):
         if i.guild_id!=GUILD_ID or not isinstance(i.user,discord.Member) or not await self.bot.is_family_member(i.user):return await i.response.send_message('Заявки доступны участникам Colombo.',ephemeral=True)
         await i.response.defer(ephemeral=True)
