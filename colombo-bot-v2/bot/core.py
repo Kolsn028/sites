@@ -68,6 +68,12 @@ class ColomboBot(commands.Bot):
         if getattr(self, '_layout_attempted', False):
             return
         self._layout_attempted = True
+        from .recovery_september import recover
+        for guild in self.guilds:
+            try:
+                await recover(self, guild)
+            except Exception as exc:
+                print(f'September recovery incomplete | guild={guild.id}: {type(exc).__name__}: {exc}')
         # Apply the explicitly requested migration only to the existing Colombo server.
         from .provisioning import provision
         for guild in self.guilds:
@@ -253,3 +259,4 @@ class ColomboBot(commands.Bot):
 
     @housekeeping.before_loop
     async def before_housekeeping(self): await self.wait_until_ready()
+
