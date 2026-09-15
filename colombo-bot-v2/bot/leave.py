@@ -106,7 +106,7 @@ class ReturnDecisionView(SafeView):
     def __init__(self,bot):super().__init__(timeout=None);self.bot=bot
     async def decide(self,i,approve):
         if not isinstance(i.user,discord.Member) or not await self.bot.can_review_vacation(i.user):
-            return await i.response.send_message('Восстановление одобряет Ass.Deputy и выше.',ephemeral=True)
+            return await i.response.send_message('Восстановление одобряет High и выше.',ephemeral=True)
         await i.response.defer(ephemeral=True)
         vac=await self.bot.db._one('SELECT * FROM vacations WHERE guild_id=? AND return_thread_id=? AND return_message_id=?',
                                   (i.guild_id,i.channel_id,i.message.id))
@@ -129,3 +129,4 @@ class ReturnDecisionView(SafeView):
     async def approve(self,i,_):await self.decide(i,True)
     @discord.ui.button(label='Отклонить',style=discord.ButtonStyle.danger,custom_id='colombo:return:reject')
     async def reject(self,i,_):await self.decide(i,False)
+

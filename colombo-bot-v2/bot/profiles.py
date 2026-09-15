@@ -2,12 +2,12 @@
 import math
 from datetime import datetime, timezone, timedelta
 import discord
-from .roles import STAFF_KEYS, has_role, is_leader
+from .roles import HIGH_KEYS, has_role, is_leader
 from .ui import base_embed
 from .interactions import SafeView
 
 SECTIONS={'all':'Обзор','mcl':'🟥 MCL','vzm':'🟩 VZM','vzz':'🟦 VZZ','capt':'⚔️ Капты',
-          'contract':'🟠 Контракты','mp':'🎯 Старые МП','msh':'🛡️ МШ','training':'🏋️ Тренировки','other':'📌 Другое'}
+          'promotion':'📈 Повышения','application':'📥 Заявки','contract':'🟠 Контракты','mp':'🎯 Старые МП','msh':'🛡️ МШ','training':'🏋️ Тренировки','other':'📌 Другое'}
 STATUS={'approved':'✅ Подтверждено','pending_review':'🟡 Проверяется','pending_classification':'⚪ Не выбран тип',
         'pending':'🟡 Проверяется','rejected':'❌ Отклонено','failed':'⚠️ Не отправлено'}
 
@@ -15,7 +15,7 @@ STATUS={'approved':'✅ Подтверждено','pending_review':'🟡 Про�
 async def can_view(bot,guild,viewer,member_id):
     if not isinstance(viewer,discord.Member):return False
     cfg=await bot.db.get_config(guild.id)
-    return viewer.id==member_id or is_leader(viewer,cfg) or bool(has_role(viewer,cfg,STAFF_KEYS))
+    return is_leader(viewer,cfg) or bool(has_role(viewer,cfg,HIGH_KEYS))
 
 
 async def records(db,guild_id,member_id,days=0):
@@ -40,6 +40,12 @@ async def records(db,guild_id,member_id,days=0):
         result.append(dict(key=f"contract:{r['id']}",category='contract',kind='contract',status=r['status'],
             title=(r['details'].split('\n')[0])[:100],date=r['created_at'],points=0,
             url=f"https://discord.com/channels/{guild_id}/{r['thread_id']}",detail=STATUS.get(r['status'],r['status'])))
+    progress=await db._all("SELECT * FROM progress_requests WHERE guild_id=? AND member_id=? AND kind='promotion'",(guild_id,member_id))
+    for r in progress:
+        result.append(dict(key=f"promotion:{r['id']}",category='promotion',kind='promotion',status=r['status'],title=f"Повышение • заявка #{r['id']}",date=r['created_at'],points=0,url=f"https://discord.com/channels/{guild_id}/{r['thread_id']}",detail=STATUS.get(r['status'],r['status'])+' · '+(r['decision'] or 'Ожидает проверки')[:700]))
+    applications=await db._all("SELECT * FROM applications WHERE guild_id=? AND applicant_id=? AND status IN ('accepted','rejected')",(guild_id,member_id))
+    for r in applications:
+        result.append(dict(key=f"application:{r['id']}",category='application',kind='application',status=r['status'],title=f"Заявка в семью #{r['id']}",date=r.get('decided_at') or r['updated_at'],points=0,url=f"https://discord.com/channels/{guild_id}/{r['thread_id']}",detail=('✅ Принят' if r['status']=='accepted' else '❌ Отказ: '+(r.get('rejection_reason') or 'Причина в старой заявке не указана'))))
     cutoff=datetime.now(timezone.utc)-timedelta(days=days) if days else None
     def stamp(r):
         dt=datetime.fromisoformat(r['date']);return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
@@ -73,8 +79,8 @@ async def render(bot,guild,member,section='all',days=30,page=0):
     for r in selected[page*5:page*5+5]:
         ts=int(datetime.fromisoformat(r['date']).replace(tzinfo=timezone.utc).timestamp()) if '+' not in r['date'] else int(datetime.fromisoformat(r['date']).timestamp())
         title=discord.utils.escape_markdown(r['title'])[:100]
-        history.append(f"<t:{ts}:d> · [{title}]({r['url']})\n{r['detail']}")
-    e.add_field(name=f'ИСТОРИЯ • {SECTIONS[section]}',value='\n\n'.join(history) or 'За этот период записей нет.',inline=False)
+        history.append(f"<t:{ts}:d> · [{title}]({r['url']})\n{discord.utils.escape_markdown(r['detail'])[:100]}")
+    e.add_field(name=f'ИСТОРИЯ • {SECTIONS[section]}',value='\n\n'.join(history)[:1024] or 'За этот период записей нет.',inline=False)
     e.set_footer(text=f'COLOMBO • {member.id} • страница {page+1}/{pages} • данные обновляются при открытии')
     return e,page,pages
 
@@ -119,7 +125,7 @@ class PlayerView(SafeView):
 
 async def open_profile(bot,i,member_id):
     if not await can_view(bot,i.guild,i.user,member_id):
-        return await i.response.send_message('Чужие дела доступны только Recruit- и старшим ролям.',ephemeral=True)
+        return await i.response.send_message('Карточки доступны только High, Deputy Leader и Leader.',ephemeral=True)
     member=i.guild.get_member(member_id)
     if not member:return await i.response.send_message('Участник покинул сервер.',ephemeral=True)
     await i.response.defer(ephemeral=True)
@@ -150,7 +156,13 @@ async def refresh_member(bot,guild,member_id,create=True):
     if not isinstance(ch,discord.TextChannel):return
     async with bot.operation_locks[('profile_card',guild.id,member_id)]:
         try:
-            e,_,_=await render(bot,guild,member)
+            # Replace old public profile embeds, including duplicate panels from before backups.
+            async for old in ch.history(limit=100):
+                if old.author.id != bot.user.id: continue
+                is_card=any(getattr(c,'custom_id',None)=='colombo:profile:open' for row in old.components for c in row.children)
+                if is_card and old.id != case.get('profile_message_id'):
+                    await old.edit(embed=base_embed('📁 Личное дело','Подробная карточка доступна High и выше.'),view=ProfileLauncher(bot),allowed_mentions=discord.AllowedMentions.none())
+            e=base_embed('📁 Личное дело', 'Отправляй сюда отчёты и доказательства. Подробная карточка и история доступны High и выше.')
             # Permanent card has the latest five entries; filters open privately per viewer.
             msg=None
             if case.get('profile_message_id'):
@@ -166,3 +178,4 @@ async def refresh_member(bot,guild,member_id,create=True):
                 await bot.db.conn.execute('UPDATE personal_cases SET profile_message_id=? WHERE id=?',(msg.id,case['id']));await bot.db.conn.commit()
         except discord.DiscordException as exc:
             print(f'Profile refresh failed member={member_id}: {type(exc).__name__}')
+

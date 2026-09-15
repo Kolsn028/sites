@@ -31,7 +31,8 @@ class SetupAccess(unittest.IsolatedAsyncioTestCase):
     async def test_both_commands_gate_roles_and_forward_main(self):
         for name in ('setup', 'setup_auto'):
             command = self.bot.tree.get_command(name)
-            self.assertTrue({'main','guest','test','colombo'}.issubset({p.name for p in command.parameters}))
+            self.assertTrue({'main','guest','test','colombo','high'}.issubset({p.name for p in command.parameters}))
+            self.assertNotIn('ass_deputy', {p.name for p in command.parameters})
             for role_id in (1, 2, 3):
                 self.assertTrue(await command.checks[0](self.interaction(role_id)))
             for role_id in (4, 5, None):
@@ -43,3 +44,4 @@ class SetupAccess(unittest.IsolatedAsyncioTestCase):
             with patch('bot.provisioning.provision', new_callable=AsyncMock) as provision:
                 await command.callback(i, main=selected)
                 self.assertIs(provision.call_args.args[2]['main_role_id'], selected)
+

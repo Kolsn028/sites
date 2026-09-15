@@ -21,7 +21,7 @@ async def migrate_guild(bot,guild):
             if msg.author.id!=bot.user.id:continue
             view=EventView(bot)
             if row['status']!='open':
-                for item in view.children:item.disabled=item.custom_id!='colombo:event:attendance'
+                for item in view.children:item.disabled=item.custom_id!='colombo:event:manage'
             await msg.edit(embed=await card(bot.db,row),view=view,allowed_mentions=discord.AllowedMentions.none())
         except discord.NotFound:
             print(f'Old event message missing: {row["id"]}; database retained')
@@ -32,3 +32,4 @@ async def migrate_guild(bot,guild):
     ids.update(r['member_id'] for r in await bot.db._all('SELECT DISTINCT member_id FROM progress_requests WHERE guild_id=?',(guild.id,)))
     for uid in ids:await refresh_member(bot,guild,uid)
     print(f'Colombo v9 migration: guild={guild.id} events={len(events)} profiles={len(ids)}')
+

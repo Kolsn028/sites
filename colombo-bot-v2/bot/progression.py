@@ -29,7 +29,7 @@ async def award_main(bot, guild, member):
 def contract_panel_embed():
     return base_embed('🟠 Активация контрактов',
         'Нажми **Оформить контракт**, укажи название и выбери: активация или помощь.\n'
-        'Прикрепи скриншот в своей приватной ветке. **Recruit- / Ass.Deputy / Deputy Leader** проверит отчёт.\n'
+        'Прикрепи скриншот в своей приватной ветке. **Recruit- / High / Deputy Leader** проверит отчёт.\n'
         'Для повышения учитывается помощь, а не просто активация.', 0xE58A35)
 
 
@@ -178,3 +178,4 @@ class ProgressReviewView(SafeView):
     async def approve(self, i, _): await self.decide(i, True)
     @discord.ui.button(label='Отклонить', style=discord.ButtonStyle.danger, custom_id='colombo:progress:reject')
     async def reject(self, i, _): await self.decide(i, False)
+

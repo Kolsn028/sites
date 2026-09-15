@@ -32,13 +32,13 @@ def register_commands(bot):
     @app_commands.guild_only()
     @app_commands.check(setup_access)
     @app_commands.describe(leader="Leader — красный, полное управление без упоминаний",
-        deputy="Deputy Leader — отчёты, отдых, назначение рекрутов", ass_deputy="High — отчёты, повышения, отдых, рекруты",
+        deputy="Deputy Leader — отчёты, отдых, назначение рекрутов", high="High — отчёты, повышения, отдых, рекруты",
         recruit="Recruit- — заявки и приём", main="main — 3 ранг, ниже Recruit-, доступ к семейным каналам и МП",
         test="Test — испытательный ранг после принятия", guest="Guest — только при входе",
         novizio="Устаревшее поле: используй test",
         colombo="Colombo — семейный доступ после принятия", vacation="Служебная роль на период отдыха")
     async def setup(i: discord.Interaction, leader: discord.Role | None = None,
-                    deputy: discord.Role | None = None, ass_deputy: discord.Role | None = None,
+                    deputy: discord.Role | None = None, high: discord.Role | None = None,
                     recruit: discord.Role | None = None, main: discord.Role | None = None,
                     test: discord.Role | None = None, guest: discord.Role | None = None,
                     novizio: discord.Role | None = None,
@@ -49,7 +49,7 @@ def register_commands(bot):
             if test and novizio and test.id != novizio.id:
                 raise ValueError('Выбери роль Test только в поле test.')
             embed = await provision(bot, i.guild, dict(leader_role_id=leader, dep_leader_role_id=deputy,
-                high_staff_role_id=ass_deputy, recruiter_role_id=recruit, main_role_id=main, accepted_role_id=test or novizio, guest_role_id=guest,
+                high_staff_role_id=high, recruiter_role_id=recruit, main_role_id=main, accepted_role_id=test or novizio, guest_role_id=guest,
                 colombo_role_id=colombo, vacation_role_id=vacation))
             await i.followup.send(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
         except ValueError as exc:
@@ -101,8 +101,12 @@ def register_commands(bot):
         rows=await bot.inactive_members(i.guild,days); lines=[f"⚠️ {m.mention} — **{d} дн.**" for m,d,_ in rows[:30]]; await i.response.send_message(embed=base_embed(f"📉 Неактив • {days}+ дней",'\n'.join(lines) if lines else '✅ Таких участников нет.',0xD64045 if lines else 0x3BAA72),ephemeral=True)
 
     @bot.tree.command(name="leaderboard",description="Лидерборд рекрутеров")
-    async def leaderboard(i:discord.Interaction):
-        rows=await bot.db.leaderboard(i.guild.id,10); medals=['🥇','🥈','🥉']; lines=[f"{medals[n] if n<3 else f'`#{n+1}`'} <@{r['recruiter_id']}> — **{r['accepted_count']}** принято" for n,r in enumerate(rows)]; await i.response.send_message(embed=base_embed("🏆 Лидерборд рекрутеров",'\n'.join(lines) if lines else 'Пока нет данных.',0xE5B64B))
+    @app_commands.choices(period=[app_commands.Choice(name="За неделю",value=7), app_commands.Choice(name="За месяц",value=30), app_commands.Choice(name="Всё время",value=0)])
+    async def leaderboard(i:discord.Interaction,period:int=0):
+        from .enhancements import recruiter_board
+        if period not in (0,7,30): raise ValueError('Выбери неделю, месяц или всё время.')
+        await i.response.defer()
+        await i.followup.send(embed=await recruiter_board(bot.db,i.guild_id,period),allowed_mentions=discord.AllowedMentions.none())
 
     @bot.tree.command(name="leaderboard_post",description="Создать/обновить постоянный лидерборд")
     @admin_only()
@@ -188,3 +192,4 @@ def register_commands(bot):
             if i.response.is_done(): await i.followup.send(text,ephemeral=True)
             else: await i.response.send_message(text,ephemeral=True)
         except discord.DiscordException: pass
+
