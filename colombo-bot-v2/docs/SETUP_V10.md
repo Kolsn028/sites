@@ -1,6 +1,6 @@
 # Настройка Guest / Colombo / Test
 
-После обновления выполните `/setup` или `/setup_auto` от Ass.Deputy, Deputy Leader, Leader либо владельца сервера. Выберите роли из списка Discord:
+После обновления выполните `/setup` или `/setup_auto` от High, Deputy Leader, Leader либо владельца сервера. Выберите роли из списка Discord:
 
 | Поле | Роль |
 |---|---|
@@ -9,7 +9,7 @@
 | test | Test |
 | main | main |
 | recruit | Recruit- |
-| ass_deputy | Ass.Deputy |
+| high | High |
 | deputy | Deputy Leader |
 | leader | Leader |
 | vacation | Отдых |
@@ -27,3 +27,4 @@
 При создании сбора тегается только роль Colombo, включая старших участников с этой ролью. Для этого бот должен иметь право упоминать все роли в канале либо Colombo должна быть упоминаемой. Изменения состава повторных уведомлений не отправляют.
 
 Проверка: `/config_show` показывает сохранённые роли. Введите `/setup` заново, если Discord показывает старые параметры.
+

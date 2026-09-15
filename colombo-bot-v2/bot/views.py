@@ -145,8 +145,11 @@ class RecruiterActionSelect(discord.ui.Select):
             return
         if app['assigned_to'] != interaction.user.id and not await self.bot.can_manage(interaction.user):
             return await interaction.response.send_message(f"Заявка закреплена за <@{app['assigned_to']}>. Решение принимает ответственный рекрутер.", ephemeral=True)
-        await interaction.response.defer(ephemeral=True, thinking=True)
         action = self.values[0]
+        if action == "reject":
+            from .enhancements import RejectionModal
+            return await interaction.response.send_modal(RejectionModal(self.bot, app["id"]))
+        await interaction.response.defer(ephemeral=True, thinking=True)
         cfg = await self.bot.db.get_config(interaction.guild.id)
         applicant = interaction.guild.get_member(app["applicant_id"])
 
@@ -194,8 +197,9 @@ class RecruiterActionSelect(discord.ui.Select):
                 await accept_member(applicant, cfg, f"Заявка #{app['id']}: принят в Colombo")
             except (discord.DiscordException, ValueError) as exc:
                 return await interaction.followup.send(f"Не удалось завершить выдачу Colombo + Test и снятие Guest. Проверь роли и права бота, затем повтори приём. {exc}", ephemeral=True)
-        await self.bot.db.bump_recruiter(interaction.guild.id, interaction.user.id, accepted=1 if accepted else 0, rejected=0 if accepted else 1)
-        await self.bot.db.update_application(app["id"], status=status, interview_room_id=None, interview_until=None, handled_by=interaction.user.id, updated_at=self.bot.now_iso())
+        from .enhancements import decide_application
+        if not await decide_application(self.bot.db, app['id'], interaction.guild_id, interaction.user.id, status, self.bot.now_iso()):
+            return await interaction.followup.send('Решение уже сохранено.', ephemeral=True)
 
         await interaction.followup.send("✅ Решение сохранено.", ephemeral=True)
         await interaction.channel.send(embed=base_embed(title, f"Рекрутер: {interaction.user.mention}\nКандидат: <@{app['applicant_id']}>", color))
@@ -310,7 +314,7 @@ class VacationModal(SafeModal, title="Заявка на отдых"):
             await thread.delete(reason="Colombo: не удалось отправить заявку отдыха")
             raise
         await self.bot.db.update_vacation(vid, review_message_id=msg.id)
-        await notify_assistants(thread, interaction.guild, cfg, base_embed("🌴 Нужна проверка отдыха", "Новая заявка ожидает решения Ass.Deputy или руководства."))
+        await notify_assistants(thread, interaction.guild, cfg, base_embed("🌴 Нужна проверка отдыха", "Новая заявка ожидает решения High или руководства."))
         await interaction.followup.send(f"Заявка на отдых **#{vid}** отправлена: {thread.mention}", ephemeral=True)
 
 
@@ -504,4 +508,5 @@ class ActivityReviewView(SafeView):
         e.set_field_at(1, name="Баллы", value="—", inline=True)
         e.set_field_at(2, name="Статус", value="🟡 Нужно выбрать тип", inline=False)
         await interaction.response.edit_message(embed=e, view=ActivityClassifyView(self.bot))
+
 

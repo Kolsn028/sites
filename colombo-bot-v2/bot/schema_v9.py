@@ -1,6 +1,7 @@
 """Additive migration: keeps source records and old attendance confirmations intact."""
 async def migrate(conn):
     additions = {
+        'applications': {'decided_at': 'TEXT', 'rejection_reason': 'TEXT', 'last_reminded_at': 'TEXT'},
         'family_events': {'reserve_capacity': 'INTEGER NOT NULL DEFAULT 0'},
         'event_signups': {'seat': "TEXT NOT NULL DEFAULT 'main'", 'confirmed_by': 'INTEGER', 'confirmed_at': 'TEXT'},
         'vacations': {'role_snapshot': 'TEXT', 'added_novice': 'INTEGER NOT NULL DEFAULT 0',
@@ -24,3 +25,4 @@ async def migrate(conn):
         CREATE INDEX IF NOT EXISTS idx_signups_member ON event_signups(member_id,attended);
         CREATE INDEX IF NOT EXISTS idx_events_guild ON family_events(guild_id,starts_at);
     ''')
+

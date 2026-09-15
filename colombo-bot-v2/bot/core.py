@@ -38,14 +38,14 @@ class ColomboBot(commands.Bot):
         from .leave import ReturnDecisionView
         self.add_view(ReturnDecisionView(self))
         from .events import EventPanelView, EventView
-        self.add_view(EventPanelView(self)); self.add_view(EventView(self))
+        self.add_view(EventPanelView(self)); self.add_view(EventView(self, legacy=True))
         gid=int(os.getenv("GUILD_ID")) if os.getenv("GUILD_ID") else None
         try:
             if gid:
                 g=discord.Object(id=gid); self.tree.copy_global_to(guild=g); await self.tree.sync(guild=g)
             else: await self.tree.sync()
         except Exception as e: print("Slash sync error:",e)
-        await self._start_health(); self.housekeeping.start()
+        await self._start_health(); self.housekeeping.start(); self.application_reminders.start()
         self.backups.watch_commits()
 
     async def _start_health(self):
@@ -54,6 +54,7 @@ class ColomboBot(commands.Bot):
         runner=web.AppRunner(app); await runner.setup(); await web.TCPSite(runner,"0.0.0.0",int(os.getenv("PORT","8080"))).start(); self.health_runner=runner
 
     async def close(self):
+        if self.application_reminders.is_running(): self.application_reminders.cancel()
         if self.housekeeping.is_running(): self.housekeeping.cancel()
         if self.health_runner: await self.health_runner.cleanup()
         if hasattr(self, 'backups'):
@@ -74,6 +75,10 @@ class ColomboBot(commands.Bot):
                 await recover(self, guild)
             except Exception as exc:
                 print(f'September recovery incomplete | guild={guild.id}: {type(exc).__name__}: {exc}')
+        from .enhancements import refresh_interface
+        for guild in self.guilds:
+            try: await refresh_interface(self, guild)
+            except Exception as exc: print(f"Interface refresh failed | guild={guild.id}: {exc}")
         # Apply the explicitly requested migration only to the existing Colombo server.
         from .provisioning import provision
         for guild in self.guilds:
@@ -165,6 +170,9 @@ class ColomboBot(commands.Bot):
             return await self._ensure_personal_case(member)
 
     async def _ensure_personal_case(self,member):
+        from .enhancements import find_case, create_case_channel
+        recovered = await find_case(self, member)
+        if recovered: return recovered
         ex=await self.db.get_case_by_member(member.guild.id,member.id)
         if ex:
             ch=member.guild.get_channel(ex["channel_id"])
@@ -178,15 +186,17 @@ class ColomboBot(commands.Bot):
         for staff in configured_roles(member.guild, c, STAFF_KEYS):
             ow[staff] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, attach_files=True, embed_links=True)
         if member.guild.me: ow[member.guild.me]=discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True,manage_channels=True,manage_messages=True,attach_files=True,embed_links=True)
-        ch=await member.guild.create_text_channel(name=safe_case_name(member.display_name,member.id),category=cat,overwrites=ow,topic=f"Личное дело • owner={member.id}",reason=f"Личное дело {member}")
+        ch=await create_case_channel(self,member,cat,ow,safe_case_name(member.display_name,member.id))
         await self.db.create_case(member.guild.id,member.id,ch.id,self.now_iso())
-        e=base_embed(f"📁 Личное дело • {member.display_name}",f"Владелец: {member.mention}\n\n1. Отправь сюда скрин/видео.\n2. Выбери тип активности.\n3. Recruit-, Ass.Deputy или Deputy Leader нажмёт **Засчитать** или **Отклонить**.\n\nВ статистику идут только подтверждённые отчёты.",0x6E56CF); e.set_thumbnail(url=member.display_avatar.url)
+        e=base_embed(f"📁 Личное дело • {member.display_name}",f"Владелец: {member.mention}\n\n1. Отправь сюда скрин/видео.\n2. Выбери тип активности.\n3. Recruit-, High или Deputy Leader нажмёт **Засчитать** или **Отклонить**.\n\nВ статистику идут только подтверждённые отчёты.",0x6E56CF); e.set_thumbnail(url=member.display_avatar.url)
         await ch.send(content=None,embed=e)
         from .profiles import refresh_member
         await refresh_member(self,member.guild,member.id,create=False)
         return ch
 
     async def on_message(self,msg):
+        from .enhancements import mark_staff_response
+        await mark_staff_response(self, msg)
         if msg.author.bot or not msg.guild or not msg.attachments: return
         case=await self.db.get_case_by_channel(msg.guild.id,msg.channel.id)
         if not case: return
@@ -260,3 +270,14 @@ class ColomboBot(commands.Bot):
     @housekeeping.before_loop
     async def before_housekeeping(self): await self.wait_until_ready()
 
+
+
+    @tasks.loop(minutes=5)
+    async def application_reminders(self):
+        from .enhancements import remind_applications
+        for guild in self.guilds:
+            try: await remind_applications(self, guild)
+            except Exception as exc: print(f'Application reminders failed | guild={guild.id}: {exc}')
+
+    @application_reminders.before_loop
+    async def before_application_reminders(self): await self.wait_until_ready()

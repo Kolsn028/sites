@@ -36,7 +36,7 @@ async def card(db, row):
     people = await db._all('SELECT * FROM event_signups WHERE event_id=? ORDER BY joined_at,member_id', (row['id'],))
     e = base_embed(('🟢 ЗАПИСЬ ОТКРЫТА' if row['status']=='open' else '🛑 ЗАВЕРШЁН') + f" • {row['title']}",
         f"Создал: <@{row['creator_id']}>\nДата: <t:{row['starts_at']}:F> (<t:{row['starts_at']}:R>)\n"
-        f"Доступ: участники семьи\n{row['details'] or ''}", EVENTS[row['kind']][2])
+        f"{row['details'] or ''}", EVENTS[row['kind']][2])
     for seat, label, cap in [('main','ОСНОВА',row['capacity']),('reserve','РЕЗЕРВ',row['reserve_capacity'])]:
         group=[p for p in people if p['seat']==seat]
         lines=[f"{'👑 ' if p['member_id']==row['creator_id'] else ''}<@{p['member_id']}>{' ✅' if p['attended'] else ''}" for p in group]
@@ -52,8 +52,7 @@ async def signup(db,event_id,member_id,leave=False,seat='main'):
 
 
 class CreateEventModal(SafeModal, title='Создать сбор • Colombo'):
-    title_input = discord.ui.TextInput(label='Название сбора', max_length=100)
-    date_input = discord.ui.TextInput(label='Дата и время по Москве (UTC+3)', placeholder='10.09.2026 20:00',max_length=16)
+    date_input = discord.ui.TextInput(label='Дата и время по Москве (UTC+3)', placeholder='ДД.ММ.ГГГГ ЧЧ:ММ',max_length=16)
     limit_input = discord.ui.TextInput(label='Количество мест (1–100)', default='35', max_length=3)
     reserve_input = discord.ui.TextInput(label='Мест в резерве (всего до 100)',default='10',max_length=2)
     details_input = discord.ui.TextInput(label='Место встречи / требования', style=discord.TextStyle.paragraph,required=False,max_length=700)
@@ -61,7 +60,7 @@ class CreateEventModal(SafeModal, title='Создать сбор • Colombo'):
         super().__init__(); self.bot=bot; self.kind=kind
     async def on_submit(self, i):
         if not await allowed(self.bot,i):
-            return await i.response.send_message('Создают только Ass.Deputy, Deputy Leader и Leader.',ephemeral=True)
+            return await i.response.send_message('Создают только High, Deputy Leader и Leader.',ephemeral=True)
         ts=parse_time(str(self.date_input))
         try: capacity=int(str(self.limit_input))
         except ValueError: raise ValueError('Количество мест — целое число от 1 до 100.')
@@ -80,7 +79,7 @@ class CreateEventModal(SafeModal, title='Создать сбор • Colombo'):
         await i.response.defer(ephemeral=True)
         async with self.bot.db.lock:
             cur=await self.bot.db.conn.execute('INSERT INTO family_events(guild_id,channel_id,creator_id,kind,title,starts_at,capacity,details,reserve_capacity) VALUES (?,?,?,?,?,?,?,?,?)',
-                (i.guild_id,ch.id,i.user.id,self.kind,str(self.title_input),ts,capacity,str(self.details_input),reserve))
+                (i.guild_id,ch.id,i.user.id,self.kind,EVENTS[self.kind][1].replace('плюсы-', '').upper(),ts,capacity,str(self.details_input),reserve))
             eid=cur.lastrowid;await self.bot.db.conn.commit()
         row=await self.bot.db._one('SELECT * FROM family_events WHERE id=?',(eid,))
         try:
@@ -100,7 +99,7 @@ class EventPanelView(SafeView):
     @discord.ui.button(label='Создать сбор',emoji='📅',style=discord.ButtonStyle.primary,custom_id='colombo:event:open')
     async def create(self,i,_):
         if not await allowed(self.bot,i):
-            return await i.response.send_message('Создавать сборы могут Ass.Deputy и выше. Для записи нажми кнопку под нужным сбором.',ephemeral=True)
+            return await i.response.send_message('Создавать сборы могут High и выше. Для записи нажми кнопку под нужным сбором.',ephemeral=True)
         cfg=await self.bot.db.get_config(i.guild_id)
         kind=next((k for k in EVENTS if cfg.get(f'{k}_panel_channel_id')==i.channel_id),None)
         if not kind: raise ValueError('Канал не настроен: /setup.')
@@ -112,7 +111,7 @@ class AttendanceSelect(discord.ui.UserSelect):
         super().__init__(placeholder='Выбери участника: поставить / снять ✅',min_values=1,max_values=1)
         self.bot=bot;self.message_id=message_id
     async def callback(self,i):
-        if not await allowed(self.bot,i): return await i.response.send_message('Только Ass.Deputy и выше.',ephemeral=True)
+        if not await allowed(self.bot,i): return await i.response.send_message('Только High и выше.',ephemeral=True)
         await i.response.defer(ephemeral=True)
         async with self.bot.operation_locks[('event',i.guild_id,self.message_id)]:
             row=await event_row(self.bot,i.guild_id,self.message_id)
@@ -129,7 +128,10 @@ class AttendanceSelect(discord.ui.UserSelect):
 
 
 class EventView(SafeView):
-    def __init__(self,bot): super().__init__(timeout=None);self.bot=bot
+    def __init__(self,bot,legacy=False):
+        super().__init__(timeout=None);self.bot=bot
+        if not legacy:
+            self.remove_item(self.attendance);self.remove_item(self.finish)
     async def change(self,i,leave=False,seat='main'):
         if not isinstance(i.user,discord.Member) or (not leave and not await self.bot.is_family_member(i.user)):
             return await i.response.send_message('Запись доступна участникам семьи.',ephemeral=True)
@@ -148,19 +150,19 @@ class EventView(SafeView):
     async def leave(self,i,_): await self.change(i,True)
     @discord.ui.button(label='Присутствие',emoji='✅',style=discord.ButtonStyle.secondary,custom_id='colombo:event:attendance')
     async def attendance(self,i,_):
-        if not await allowed(self.bot,i): return await i.response.send_message('Отмечают Ass.Deputy и выше.',ephemeral=True)
+        if not await allowed(self.bot,i): return await i.response.send_message('Отмечают High и выше.',ephemeral=True)
         row=await event_row(self.bot,i.guild_id,i.message.id)
         if not row or not roster.may_confirm(i.user,await self.bot.db.get_config(i.guild_id),row):
             return await i.response.send_message('Только создатель МП, Leader или Deputy Leader.',ephemeral=True)
         view=SafeView(timeout=180);view.add_item(AttendanceSelect(self.bot,i.message.id))
         await i.response.send_message('Выбери записанного участника. Повторный выбор снимает отметку.',view=view,ephemeral=True)
-    @discord.ui.button(label='Состав и лимиты',emoji='⚙️',style=discord.ButtonStyle.secondary,custom_id='colombo:event:manage',row=1)
+    @discord.ui.button(label='Управление',emoji='⚙️',style=discord.ButtonStyle.secondary,custom_id='colombo:event:manage',row=1)
     async def manage(self,i,_):
-        if not await allowed(self.bot,i): return await i.response.send_message('Только Ass.Deputy и выше.',ephemeral=True)
+        if not await allowed(self.bot,i): return await i.response.send_message('Только High и выше.',ephemeral=True)
         await i.response.send_message('Перемести участника или измени число мест.',view=RosterManageView(self.bot,i.message.id),ephemeral=True)
     @discord.ui.button(label='Завершить',emoji='🛑',style=discord.ButtonStyle.danger,custom_id='colombo:event:finish',row=1)
     async def finish(self,i,_):
-        if not await allowed(self.bot,i): return await i.response.send_message('Завершают Ass.Deputy и выше.',ephemeral=True)
+        if not await allowed(self.bot,i): return await i.response.send_message('Завершают High и выше.',ephemeral=True)
         await i.response.defer(ephemeral=True)
         async with self.bot.operation_locks[('event',i.guild_id,i.message.id)]:
             row=await event_row(self.bot,i.guild_id,i.message.id)
@@ -169,7 +171,7 @@ class EventView(SafeView):
                 await self.bot.db.conn.execute("UPDATE family_events SET status='finished' WHERE id=?",(row['id'],));await self.bot.db.conn.commit()
             row['status']='finished'
             view=EventView(self.bot)
-            for item in view.children: item.disabled=item.custom_id!='colombo:event:attendance'
+            for item in view.children: item.disabled=item.custom_id!='colombo:event:manage'
             await i.message.edit(embed=await card(self.bot.db,row),view=view,allowed_mentions=discord.AllowedMentions.none())
             await i.followup.send('Сбор завершён. Список сохранён; можно отметить присутствие.',ephemeral=True)
 
@@ -177,9 +179,8 @@ class EventView(SafeView):
 def event_panel(kind):
     emoji,name,color=EVENTS[kind]
     return base_embed(f'{emoji} {name.upper()}',
-        '**Ass.Deputy и выше:** нажми «Создать сбор», укажи время, места в основе и резерве.\n'
-        '**Участники семьи:** нажмите «Записаться» под нужным сбором. «В резерв» — запасной состав; «Выйти» освобождает место. Переводит между составами Ass.Deputy и выше.\n'
-        '✅ Присутствие отмечает создатель МП, Leader или Deputy Leader. Оно автоматически появляется в карточке игрока; одна запись не считается посещением.',color)
+        'Нажми **Записаться** под сбором или выбери **В резерв**.\n'
+        'Создание и управление — **High и выше**.',color)
 
 
 class MoveSelect(discord.ui.UserSelect):
@@ -187,7 +188,7 @@ class MoveSelect(discord.ui.UserSelect):
         super().__init__(placeholder='Перевести в '+('основу' if seat=='main' else 'резерв'),row=0 if seat=='main' else 1)
         self.bot=bot;self.message_id=message_id;self.seat=seat
     async def callback(self,i):
-        if not await allowed(self.bot,i):return await i.response.send_message('Только Ass.Deputy и выше.',ephemeral=True)
+        if not await allowed(self.bot,i):return await i.response.send_message('Только High и выше.',ephemeral=True)
         await i.response.defer(ephemeral=True)
         async with self.bot.operation_locks[('event',i.guild_id,self.message_id)]:
             row=await event_row(self.bot,i.guild_id,self.message_id)
@@ -203,7 +204,7 @@ class LimitsModal(SafeModal,title='Лимиты сбора'):
     reserve=discord.ui.TextInput(label='Мест в резерве',max_length=2)
     def __init__(self,bot,message_id):super().__init__();self.bot=bot;self.message_id=message_id
     async def on_submit(self,i):
-        if not await allowed(self.bot,i):return await i.response.send_message('Только Ass.Deputy и выше.',ephemeral=True)
+        if not await allowed(self.bot,i):return await i.response.send_message('Только High и выше.',ephemeral=True)
         try:main,reserve=int(str(self.main)),int(str(self.reserve))
         except ValueError:raise ValueError('Укажи целые числа.')
         await i.response.defer(ephemeral=True)
@@ -223,5 +224,30 @@ class RosterManageView(SafeView):
         self.add_item(MoveSelect(bot,message_id,'main'));self.add_item(MoveSelect(bot,message_id,'reserve'))
     @discord.ui.button(label='Изменить лимиты',style=discord.ButtonStyle.primary,row=2)
     async def limits(self,i,_):
-        if not await allowed(self.bot,i):return await i.response.send_message('Только Ass.Deputy и выше.',ephemeral=True)
+        if not await allowed(self.bot,i):return await i.response.send_message('Только High и выше.',ephemeral=True)
         await i.response.send_modal(LimitsModal(self.bot,self.message_id))
+
+
+    @discord.ui.button(label='Присутствие',emoji='✅',style=discord.ButtonStyle.secondary,row=2)
+    async def attendance(self,i,_):
+        if not await allowed(self.bot,i): return await i.response.send_message('Только High и выше.',ephemeral=True)
+        row=await event_row(self.bot,i.guild_id,self.message_id)
+        if not row or not roster.may_confirm(i.user,await self.bot.db.get_config(i.guild_id),row):
+            return await i.response.send_message('Присутствие подтверждает создатель, Deputy Leader или Leader.',ephemeral=True)
+        view=SafeView(timeout=180);view.add_item(AttendanceSelect(self.bot,self.message_id))
+        await i.response.send_message('Выбери участника для отметки присутствия.',view=view,ephemeral=True)
+
+    @discord.ui.button(label='Завершить сбор',style=discord.ButtonStyle.danger,row=3)
+    async def finish(self,i,_):
+        if not await allowed(self.bot,i): return await i.response.send_message('Только High и выше.',ephemeral=True)
+        await i.response.defer(ephemeral=True)
+        async with self.bot.operation_locks[('event',i.guild_id,self.message_id)]:
+            row=await event_row(self.bot,i.guild_id,self.message_id)
+            if not row: return await i.followup.send('Сбор не найден.',ephemeral=True)
+            async with self.bot.db.lock:
+                await self.bot.db.conn.execute("UPDATE family_events SET status='finished' WHERE id=?",(row['id'],));await self.bot.db.conn.commit()
+            row['status']='finished';view=EventView(self.bot)
+            for item in view.children: item.disabled=item.custom_id!='colombo:event:manage'
+            msg=await i.channel.fetch_message(self.message_id)
+            await msg.edit(embed=await card(self.bot.db,row),view=view,allowed_mentions=discord.AllowedMentions.none())
+            await i.followup.send('Сбор завершён. Подтверждение присутствия доступно в управлении.',ephemeral=True)
