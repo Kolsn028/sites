@@ -126,7 +126,7 @@ class DecisionModal(SafeModal, title='Решение по заявке'):
         await i.response.defer(ephemeral=True, thinking=True)
         async with self.bot.operation_locks[('progress_decision', i.guild_id, self.thread_id)]:
             row = await self.bot.db._one('SELECT * FROM progress_requests WHERE guild_id=? AND thread_id=?', (i.guild_id, self.thread_id))
-            if not row or row['status'] != 'pending':
+            if not row or row['kind'] not in ('contract','promotion') or row['status'] != 'pending':
                 return await i.followup.send('Заявка уже закрыта или не найдена.', ephemeral=True)
             allowed = await self.bot.can_promote(i.user) if row['kind'] == 'promotion' else await self.bot.is_high_staff(i.user)
             if not allowed:
@@ -168,7 +168,7 @@ class ProgressReviewView(SafeView):
         super().__init__(timeout=None); self.bot=bot
     async def decide(self, i, accepted):
         row = await self.bot.db._one('SELECT kind FROM progress_requests WHERE guild_id=? AND thread_id=?', (i.guild_id, i.channel_id))
-        if not row or not isinstance(i.user, discord.Member):
+        if not row or row['kind'] not in ('contract','promotion') or not isinstance(i.user, discord.Member):
             return await i.response.send_message('Заявка не найдена.', ephemeral=True)
         allowed = await self.bot.can_promote(i.user) if row['kind'] == 'promotion' else await self.bot.is_high_staff(i.user)
         if not allowed:
