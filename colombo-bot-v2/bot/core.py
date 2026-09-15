@@ -27,6 +27,8 @@ class ColomboBot(commands.Bot):
         from .discord_backup import DiscordBackups
         self.backups = DiscordBackups(self)
         await self.backups.restore()
+        from .tiers import TierPanelView,TierReviewView
+        self.add_view(TierPanelView(self));self.add_view(TierReviewView(self))
         from .dashboard import ManagementView
         self.add_view(ManagementView(self))
         from .views import ApplicationPanelView,RecruiterActionView,VacationPanelView,VacationDecisionView,CasePanelView,ActivityClassifyView,ActivityReviewView
@@ -77,6 +79,10 @@ class ColomboBot(commands.Bot):
                 await recover(self, guild)
             except Exception as exc:
                 print(f'September recovery incomplete | guild={guild.id}: {type(exc).__name__}: {exc}')
+        from .tiers import install as install_tiers
+        for guild in self.guilds:
+            try: await install_tiers(self,guild)
+            except Exception as exc: print(f"Tier setup failed | guild={guild.id}: {exc}")
         from .enhancements import refresh_interface
         for guild in self.guilds:
             try: await refresh_interface(self, guild)

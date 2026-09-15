@@ -7,7 +7,7 @@ from .ui import base_embed
 from .interactions import SafeView
 
 SECTIONS={'all':'Обзор','mcl':'🟥 MCL','vzm':'🟩 VZM','vzz':'🟦 VZZ','capt':'⚔️ Капты',
-          'promotion':'📈 Повышения','application':'📥 Заявки','contract':'🟠 Контракты','mp':'🎯 Старые МП','msh':'🛡️ МШ','training':'🏋️ Тренировки','other':'📌 Другое'}
+          'tier':'🎖️ Тиры','promotion':'📈 Повышения','application':'📥 Заявки','contract':'🟠 Контракты','mp':'🎯 Старые МП','msh':'🛡️ МШ','training':'🏋️ Тренировки','other':'📌 Другое'}
 STATUS={'approved':'✅ Подтверждено','pending_review':'🟡 Проверяется','pending_classification':'⚪ Не выбран тип',
         'pending':'🟡 Проверяется','rejected':'❌ Отклонено','failed':'⚠️ Не отправлено'}
 
@@ -40,9 +40,9 @@ async def records(db,guild_id,member_id,days=0):
         result.append(dict(key=f"contract:{r['id']}",category='contract',kind='contract',status=r['status'],
             title=(r['details'].split('\n')[0])[:100],date=r['created_at'],points=0,
             url=f"https://discord.com/channels/{guild_id}/{r['thread_id']}",detail=STATUS.get(r['status'],r['status'])))
-    progress=await db._all("SELECT * FROM progress_requests WHERE guild_id=? AND member_id=? AND kind='promotion'",(guild_id,member_id))
+    progress=await db._all("SELECT * FROM progress_requests WHERE guild_id=? AND member_id=? AND kind IN ('promotion','tier_1','tier_2','tier_3')",(guild_id,member_id))
     for r in progress:
-        result.append(dict(key=f"promotion:{r['id']}",category='promotion',kind='promotion',status=r['status'],title=f"Повышение • заявка #{r['id']}",date=r['created_at'],points=0,url=f"https://discord.com/channels/{guild_id}/{r['thread_id']}",detail=STATUS.get(r['status'],r['status'])+' · '+(r['decision'] or 'Ожидает проверки')[:700]))
+        result.append(dict(key=f"promotion:{r['id']}",category='tier' if r['kind'].startswith('tier_') else 'promotion',kind='promotion',status=r['status'],title=f"{('Тир '+r['kind'][-1]) if r['kind'].startswith('tier_') else 'Повышение'} • заявка #{r['id']}",date=r['created_at'],points=0,url=f"https://discord.com/channels/{guild_id}/{r['thread_id']}",detail=STATUS.get(r['status'],r['status'])+' · '+(r['decision'] or 'Ожидает проверки')[:700]))
     applications=await db._all("SELECT * FROM applications WHERE guild_id=? AND applicant_id=? AND status IN ('accepted','rejected')",(guild_id,member_id))
     for r in applications:
         result.append(dict(key=f"application:{r['id']}",category='application',kind='application',status=r['status'],title=f"Заявка в семью #{r['id']}",date=r.get('decided_at') or r['updated_at'],points=0,url=f"https://discord.com/channels/{guild_id}/{r['thread_id']}",detail=('✅ Принят' if r['status']=='accepted' else '❌ Отказ: '+(r.get('rejection_reason') or 'Причина в старой заявке не указана'))))

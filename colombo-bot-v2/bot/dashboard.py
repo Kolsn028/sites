@@ -5,7 +5,7 @@ from .roles import may_manage_recruiters,HIGH_KEYS,configured_roles
 from .ui import base_embed
 
 STATUS={'pending':'⏳ Ожидает проверки','interview':'📞 Обзвон','accepted':'✅ Принят','rejected':'❌ Отказ','approved':'✅ Одобрено','return_pending':'⏳ Возвращение на проверке','returned':'✅ Вернулся','pending_review':'⏳ Проверяется','pending_classification':'Выбери тип отчёта','applying':'⏳ Оформляется','restoring':'⏳ Возвращение оформляется','failed':'⚠️ Не отправлено'}
-LABELS={'all':'Вся очередь','application':'Заявки в семью','vacation':'Отдых','contract':'Контракты','promotion':'Повышения','report':'Отчёты'}
+LABELS={'all':'Вся очередь','application':'Заявки в семью','vacation':'Отдых','contract':'Контракты','promotion':'Повышения','report':'Отчёты','tier_1':'Тир 1','tier_2':'Тир 2','tier_3':'Тир 3'}
 
 async def high(bot,i):
     return isinstance(i.user,discord.Member) and may_manage_recruiters(i.user,await bot.db.get_config(i.guild_id))
@@ -20,7 +20,7 @@ async def request_rows(db,gid,member_id=None,pending=False,kind='all',page=0):
         if table=='activity_submissions': actor='handled_by'
         where='guild_id=?';params=[gid]
         if member_id is not None: where+=f' AND {owner}=?';params.append(member_id)
-        if pending: where+=" AND status IN ('pending','interview','return_pending','pending_review','pending_classification')"
+        if pending: where+=" AND status IN ('pending','interview','return_pending','pending_review','pending_classification','applying')"
         parts.append(f'SELECT id,{category} kind,{owner} member_id,status,{channel} channel_id,{actor} actor,{reason} reason,created_at FROM {table} WHERE {where}')
         args+=params
     union=' UNION ALL '.join(parts)
