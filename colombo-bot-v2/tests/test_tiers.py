@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock,MagicMock
 import discord
-from bot.tiers import award_tier,TIER_ROLES,GUILD_ID,TierModal,can_review
+from bot.tiers import award_tier,TIER_ROLES,GUILD_ID,TierModal,can_review,TIERCHECK_ROLE_ID,TierReviewView,TierDecision
 
 class Role:
     managed=False
@@ -43,10 +43,28 @@ class Tiers(unittest.IsolatedAsyncioTestCase):
         cfg={'high_staff_role_id':3,'dep_leader_role_id':2,'leader_role_id':1,'recruiter_role_id':4}
         bot=SimpleNamespace(db=SimpleNamespace(get_config=AsyncMock(return_value=cfg)))
         i=SimpleNamespace(guild_id=GUILD_ID,user=user)
-        for role,expected in [(4,False),(3,True),(2,True),(1,True)]:
+        for role,expected in [(4,False),(3,False),(2,False),(1,False),(TIERCHECK_ROLE_ID,True)]:
             user.get_role.side_effect=lambda rid: rid==role
             self.assertEqual(bool(await can_review(bot,i)),expected)
         for tier in (1,2,3):
             form=TierModal(bot,tier)
             self.assertEqual(len(form.children),5)
             self.assertEqual(form.mcl.required,tier in (1,2))
+
+    async def test_owner_admin_without_tiercheck_denied_and_modal_rechecks(self):
+        user=MagicMock(spec=discord.Member);user.id=100;user.guild=SimpleNamespace(owner_id=100)
+        user.guild_permissions=discord.Permissions(administrator=True)
+        user.get_role.return_value=None
+        i=SimpleNamespace(guild_id=GUILD_ID,user=user,response=SimpleNamespace(send_message=AsyncMock()))
+        bot=SimpleNamespace()
+        self.assertFalse(await can_review(bot,i))
+        user.get_role.return_value=object()
+        view=TierReviewView(bot)
+        self.assertTrue(await view.interaction_check(i))
+        # Role removed after opening the form: neither decision may proceed.
+        user.get_role.return_value=None
+        for accepted in (True,False):
+            await TierDecision(bot,accepted).on_submit(i)
+        self.assertEqual(i.response.send_message.await_count,2)
+        user.get_role.return_value=object();i.guild_id=42
+        self.assertFalse(await can_review(bot,i))
