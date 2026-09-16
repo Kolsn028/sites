@@ -2,7 +2,7 @@
 import json
 import discord
 from .interactions import SafeModal,SafeView,private_thread
-from .roles import HIGH_KEYS,STAFF_KEYS,configured_roles,may_manage_recruiters
+from .roles import STAFF_KEYS,configured_roles
 from .ui import base_embed
 GUILD_ID=1503854540116721747
 TIERCHECK_ROLE_ID=1549336543527960636
@@ -10,10 +10,10 @@ TIER_ROLES={1:1549336886886015046,2:1549337062497452183,3:1549337206139785266}
 KINDS=('tier_1','tier_2','tier_3')
 
 async def can_review(bot,i):
-    return i.guild_id==GUILD_ID and isinstance(i.user,discord.Member) and may_manage_recruiters(i.user,await bot.db.get_config(i.guild_id))
+    return i.guild_id==GUILD_ID and isinstance(i.user,discord.Member) and bool(i.user.get_role(TIERCHECK_ROLE_ID))
 
 def panel(tier):
-    return base_embed(f'Повышение на тир {tier}','Прикрепи ссылки на откаты и расскажи, зачем тебе нужен тир.\nРассматривают **High и выше**. При одобрении другие тиры заменяются выбранным.',0xA82D40)
+    return base_embed(f'Повышение на тир {tier}','Прикрепи ссылки на откаты и расскажи, зачем тебе нужен тир.\nРассматривают **tiercheck**. При одобрении другие тиры заменяются выбранным.',0xA82D40)
 
 async def award_tier(guild,member,tier):
     if guild.id!=GUILD_ID or tier not in TIER_ROLES:raise ValueError('Неизвестный сервер или тир.')
@@ -46,9 +46,9 @@ class TierModal(SafeModal):
             if existing:return await i.followup.send(f"У тебя уже есть заявка: <#{existing['thread_id']}>.",ephemeral=True)
             if (getattr(i.channel,'topic',None) or '')!=f'colombo:tier:{self.tier}:{self.bot.user.id}:{i.guild_id}':raise ValueError('Открой актуальный канал тира.')
             if not i.guild.get_role(TIER_ROLES[self.tier]):raise ValueError('Роль тира удалена. Сообщи High.')
-            cfg=await self.bot.db.get_config(i.guild_id);high=configured_roles(i.guild,cfg,HIGH_KEYS)
-            if len(high)!=3:raise ValueError('Не настроены High, Deputy Leader или Leader.')
-            thread=await private_thread(i.channel,i.user,high,f'тир-{self.tier}-{i.user.display_name}')
+            reviewer_role=i.guild.get_role(TIERCHECK_ROLE_ID)
+            if not reviewer_role:raise ValueError('Не найдена роль tiercheck.')
+            thread=await private_thread(i.channel,i.user,[reviewer_role],f'тир-{self.tier}-{i.user.display_name}')
             fields=[('Ник / возраст / статик',str(self.identity)),('Откаты с ГГ',str(self.gg)),('Откаты с Каптов',str(self.kapt)),('Откаты с МЦЛ',str(self.mcl) or 'Не приложены'),('Для чего нужен тир',str(self.purpose))]
             try:
                 async with self.bot.db.lock:
@@ -78,7 +78,7 @@ class TierDecision(SafeModal):
     reason=discord.ui.TextInput(label='Комментарий / причина отказа',style=discord.TextStyle.paragraph,max_length=700,min_length=3)
     def __init__(self,bot,accepted):super().__init__(title='Одобрить тир' if accepted else 'Причина отказа',timeout=300);self.bot=bot;self.accepted=accepted
     async def on_submit(self,i):
-        if not await can_review(self.bot,i):return await i.response.send_message('Рассматривают только High и выше.',ephemeral=True)
+        if not await can_review(self.bot,i):return await i.response.send_message('Рассматривают только участники с ролью tiercheck.',ephemeral=True)
         reason=str(self.reason).strip()
         if len(reason)<3:return await i.response.send_message('Напиши комментарий не короче трёх символов.',ephemeral=True)
         await i.response.defer(ephemeral=True)
@@ -112,7 +112,7 @@ class TierDecision(SafeModal):
 class TierReviewView(SafeView):
     def __init__(self,bot):super().__init__(timeout=None);self.bot=bot
     async def interaction_check(self,i):
-        if not await can_review(self.bot,i):await i.response.send_message('Рассматривают только High и выше.',ephemeral=True);return False
+        if not await can_review(self.bot,i):await i.response.send_message('Рассматривают только участники с ролью tiercheck.',ephemeral=True);return False
         return True
     @discord.ui.button(label='Одобрить',style=discord.ButtonStyle.success,custom_id='colombo:tier:approve')
     async def approve(self,i,_):await i.response.send_modal(TierDecision(self.bot,True))
@@ -124,7 +124,9 @@ async def install(bot,guild):
     cfg=await bot.db.get_config(guild.id);category=guild.get_channel(cfg.get('family_category_id') or 0)
     if not isinstance(category,discord.CategoryChannel):raise ValueError('Не найдена настроенная категория COLOMBO • СОСТАВ.')
     if any(not guild.get_role(rid) for rid in TIER_ROLES.values()):raise ValueError('Не найдены указанные роли тиров.')
-    family=configured_roles(guild,cfg,STAFF_KEYS+('colombo_role_id','accepted_role_id','main_role_id'))
+    reviewer_role=guild.get_role(TIERCHECK_ROLE_ID)
+    if not reviewer_role:raise ValueError('Не найдена роль tiercheck.')
+    family=[reviewer_role]+configured_roles(guild,cfg,STAFF_KEYS+('colombo_role_id','accepted_role_id','main_role_id'))
     ow={guild.default_role:discord.PermissionOverwrite(view_channel=False),guild.me:discord.PermissionOverwrite(view_channel=True,send_messages=True,embed_links=True,read_message_history=True,create_private_threads=True,send_messages_in_threads=True,manage_threads=True)}
     for r in family:ow[r]=discord.PermissionOverwrite(view_channel=True,send_messages=False,read_message_history=True,send_messages_in_threads=True)
     channels=await guild.fetch_channels()
@@ -140,3 +142,16 @@ async def install(bot,guild):
         if message:await message.edit(embed=panel(tier),view=TierPanelView(bot),allowed_mentions=discord.AllowedMentions.none())
         else:await ch.send(embed=panel(tier),view=TierPanelView(bot),allowed_mentions=discord.AllowedMentions.none())
         print(f'Tier channel ready | guild={guild.id} | tier={tier} | channel={ch.id}')
+
+    # Existing pending applications must also be accessible to the new reviewers.
+    if not guild.chunked:await guild.chunk(cache=True)
+    pending=await bot.db._all("SELECT thread_id FROM progress_requests WHERE guild_id=? AND kind IN ('tier_1','tier_2','tier_3') AND status IN ('pending','applying')",(guild.id,))
+    for row in pending:
+        try:
+            thread=await guild.fetch_channel(row['thread_id'])
+            if not isinstance(thread,discord.Thread) or not thread.parent or not (thread.parent.topic or '').startswith(f'colombo:tier:'):continue
+            members={m.id for m in await thread.fetch_members()}
+            for member in reviewer_role.members:
+                if not member.bot and member.id not in members:await thread.add_user(member)
+        except discord.NotFound:continue
+    print(f'Tiercheck access ready | guild={guild.id} | pending={len(pending)}')
