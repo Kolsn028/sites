@@ -2,9 +2,10 @@
 import json
 import discord
 from .interactions import SafeModal,SafeView,private_thread
-from .roles import HIGH_KEYS,STAFF_KEYS,configured_roles,may_manage_recruiters,notify_assistants
+from .roles import HIGH_KEYS,STAFF_KEYS,configured_roles,may_manage_recruiters
 from .ui import base_embed
 GUILD_ID=1503854540116721747
+TIERCHECK_ROLE_ID=1549336543527960636
 TIER_ROLES={1:1549336886886015046,2:1549337062497452183,3:1549337206139785266}
 KINDS=('tier_1','tier_2','tier_3')
 
@@ -62,7 +63,8 @@ class TierModal(SafeModal):
                     await self.bot.db.conn.execute("UPDATE progress_requests SET status='failed' WHERE id=?",(rid,));await self.bot.db.conn.commit()
                 raise
             await i.followup.send(f'Заявка отправлена: {thread.mention}',ephemeral=True)
-            await notify_assistants(thread,i.guild,cfg,base_embed('Нужна проверка тира',f'Заявка на **тир {self.tier}**.'))
+            # Notify in the parent channel; application details stay in the private thread.
+            await i.channel.send(f'<@&{TIERCHECK_ROLE_ID}> · Новая заявка на **тир {self.tier}**: {thread.mention}',allowed_mentions=discord.AllowedMentions(everyone=False,users=False,roles=[discord.Object(id=TIERCHECK_ROLE_ID)],replied_user=False))
 
 class TierPanelView(SafeView):
     def __init__(self,bot):super().__init__(timeout=None);self.bot=bot
