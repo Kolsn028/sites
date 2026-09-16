@@ -1,9 +1,13 @@
 import copy
 import tempfile
 import unittest
+import asyncio
+from collections import defaultdict
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 from pathlib import Path
 from bot.database import Database
-from bot.discord_backup import snapshot, encode, decode, restore_payload, change_lines
+from bot.discord_backup import snapshot, encode, decode, restore_payload, change_lines, DiscordBackups
 
 
 class DiscordStorage(unittest.IsolatedAsyncioTestCase):
@@ -65,3 +69,45 @@ class DiscordStorage(unittest.IsolatedAsyncioTestCase):
         self.assertIn('отказов 2', text)
         self.assertIn('присутствие: да', text)
         self.assertEqual(change_lines(payload, payload), [])
+
+    async def test_throttled_auto_save_manual_bypass_and_log_retry(self):
+        bot = SimpleNamespace(db=self.db, operation_locks=defaultdict(asyncio.Lock))
+        backups = DiscordBackups(bot)
+        guild = SimpleNamespace(id=1)
+        backup_channel, log_channel = SimpleNamespace(send=AsyncMock()), SimpleNamespace(send=AsyncMock())
+        async def upload(**kwargs):
+            blob = kwargs['file'].fp.getvalue()
+            return SimpleNamespace(attachments=[SimpleNamespace(read=AsyncMock(return_value=blob))])
+        backup_channel.send.side_effect = upload
+        backups.ensure_channels = AsyncMock(return_value={'backup': backup_channel, 'logs': log_channel})
+        with patch('bot.discord_backup.monotonic', return_value=100):
+            log_channel.send.side_effect = RuntimeError('temporary log failure')
+            with self.assertRaises(RuntimeError):
+                await backups.save(guild, automatic=True)
+            self.assertIn(1, backups.hashes)
+            await backups.save(guild, automatic=True)
+            backup_channel.send.assert_awaited_once()
+            log_channel.send.side_effect = None
+            await backups.save(guild)  # retry log without uploading identical data
+            backup_channel.send.assert_awaited_once()
+            self.assertNotIn(1, backups.pending_logs)
+            await self.db.bump_recruiter(1, 30, accepted=1)
+            await backups.save(guild, automatic=True)
+            backup_channel.send.assert_awaited_once()
+            await backups.save(guild)  # explicit save bypasses interval
+            self.assertEqual(backup_channel.send.await_count, 2)
+        await self.db.bump_recruiter(1, 30, accepted=1)
+        with patch('bot.discord_backup.monotonic', return_value=161):
+            await backups.save(guild, automatic=True)
+            self.assertEqual(backup_channel.send.await_count, 3)
+
+    async def test_large_log_uses_one_message_and_complete_attachment(self):
+        backups = DiscordBackups(SimpleNamespace())
+        lines = [f'Изменение {n} ' + 'x' * 100 for n in range(50)]
+        backups.pending_logs[1] = lines.copy()
+        channel = SimpleNamespace(send=AsyncMock())
+        await backups.flush_logs(1, channel)
+        channel.send.assert_awaited_once()
+        call = channel.send.call_args
+        self.assertLess(len(call.args[0]), 2000)
+        self.assertEqual(call.kwargs['file'].fp.getvalue().decode(), '\n'.join(lines))

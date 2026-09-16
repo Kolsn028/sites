@@ -38,7 +38,7 @@ class Tiers(unittest.IsolatedAsyncioTestCase):
         guild,member,roles=self.setup_member();member.roles.append(roles[1])
         await award_tier(guild,member,1)
         member.add_roles.assert_not_awaited();self.assertEqual({r.id for r in member.roles},{99,TIER_ROLES[1]})
-    async def test_access_and_four_field_modal(self):
+    async def test_access_and_updated_modal(self):
         user=MagicMock(spec=discord.Member);user.id=5;user.guild=SimpleNamespace(owner_id=100)
         cfg={'high_staff_role_id':3,'dep_leader_role_id':2,'leader_role_id':1,'recruiter_role_id':4}
         bot=SimpleNamespace(db=SimpleNamespace(get_config=AsyncMock(return_value=cfg)))
@@ -46,4 +46,7 @@ class Tiers(unittest.IsolatedAsyncioTestCase):
         for role,expected in [(4,False),(3,True),(2,True),(1,True)]:
             user.get_role.side_effect=lambda rid: rid==role
             self.assertEqual(bool(await can_review(bot,i)),expected)
-        self.assertEqual(len(TierModal(bot,1).children),4)
+        for tier in (1,2,3):
+            form=TierModal(bot,tier)
+            self.assertEqual(len(form.children),5)
+            self.assertEqual(form.mcl.required,tier in (1,2))

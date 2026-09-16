@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+from time import monotonic
 from datetime import datetime, timezone
 import discord
 from .roles import HIGH_KEYS, configured_roles
@@ -14,6 +15,7 @@ TABLES = ('guild_config', 'applications', 'recruiter_stats', 'vacations',
           'activity_submissions', 'audit_actions')
 MAX_RAW = 64 * 1024 * 1024
 MAX_FILE = 8 * 1024 * 1024
+AUTO_SAVE_INTERVAL = 60
 
 
 async def snapshot(db, guild_id):
@@ -142,6 +144,25 @@ class DiscordBackups:
         self.hashes = {}
         self.errors = {}
         self.saved_at = {}
+        self.last_attempt = {}
+        self.pending_logs = {}
+
+    async def flush_logs(self, guild_id, channel):
+        lines = self.pending_logs.get(guild_id, [])
+        if not lines:
+            return
+        detail = '\n'.join(lines)
+        text = f'📋 Сводка изменений · {len(lines)} записей\n'
+        for line in lines:
+            if len(text) + len(line) + 1 > 1700:
+                break
+            text += line + '\n'
+        kwargs = {}
+        if len(detail) > 1700:
+            text += '\nПолный список — в приложенном файле.'
+            kwargs['file'] = discord.File(io.BytesIO(detail.encode('utf-8')), filename='colombo-log.txt')
+        await channel.send(text, allowed_mentions=discord.AllowedMentions.none(), **kwargs)
+        self.pending_logs.pop(guild_id, None)
 
     def topic(self, guild_id, kind):
         return f'colombo:{kind}:v1:{self.bot.user.id}:{guild_id}'
@@ -232,15 +253,23 @@ class DiscordBackups:
         connection.commit = commit
         self.task = asyncio.create_task(self.worker())
 
-    async def save(self, guild):
+    async def save(self, guild, *, automatic=False):
         async with self.mutex:
+            now = monotonic()
+            if automatic and now - self.last_attempt.get(guild.id, -AUTO_SAVE_INTERVAL) < AUTO_SAVE_INTERVAL:
+                return
+            self.last_attempt[guild.id] = now
             if self.bot.operation_locks[('setup', guild.id)].locked():
                 raise ValueError('Настройка выполняется; копия будет сохранена после её завершения.')
-            channels = await self.ensure_channels(guild)
             payload = await snapshot(self.bot.db, guild.id)
             blob, checksum = encode(payload)
             if self.hashes.get(guild.id) == checksum:
+                if self.pending_logs.get(guild.id):
+                    channels = await self.ensure_channels(guild)
+                    await self.flush_logs(guild.id, channels['logs'])
+                self.errors.pop(guild.id, None)
                 return
+            channels = await self.ensure_channels(guild)
             message = await channels['backup'].send(
                 content=f'COLOMBO_BACKUP_V1 {checksum}',
                 file=discord.File(io.BytesIO(blob), filename='colombo-state.json.gz'),
@@ -248,24 +277,19 @@ class DiscordBackups:
             if not message.attachments or hashlib.sha256(await message.attachments[0].read()).hexdigest() != checksum:
                 raise RuntimeError('Не удалось подтвердить сохранённую копию.')
             lines = change_lines(self.last.get(guild.id), payload)
-            # Backup is already durable even if the human-readable log fails.
-            text = ''
-            for line in lines:
-                if len(text) + len(line) > 1800:
-                    await channels['logs'].send(text, allowed_mentions=discord.AllowedMentions.none())
-                    text = ''
-                text += line[:500] + '\n'
-            if text:
-                await channels['logs'].send(text, allowed_mentions=discord.AllowedMentions.none())
+            # Commit the verified backup before logging: a failed log must not
+            # cause another identical snapshot upload on the next attempt.
+            self.pending_logs.setdefault(guild.id, []).extend(lines)
             self.last[guild.id] = payload
             self.hashes[guild.id] = checksum
             self.saved_at[guild.id] = datetime.now(timezone.utc).isoformat()
+            await self.flush_logs(guild.id, channels['logs'])
             self.errors.pop(guild.id, None)
 
     async def worker(self):
         while True:
             try:
-                await asyncio.wait_for(self.wake.wait(), timeout=60)
+                await asyncio.wait_for(self.wake.wait(), timeout=5)
             except asyncio.TimeoutError:
                 pass
             self.wake.clear()
@@ -275,7 +299,7 @@ class DiscordBackups:
                 if not cfg.get('management_category_id'):
                     continue
                 try:
-                    await self.save(guild)
+                    await self.save(guild, automatic=True)
                 except Exception as exc:
                     self.errors[guild.id] = str(exc)
                     print(f'Discord backup failed | guild={guild.id}: {exc}')
