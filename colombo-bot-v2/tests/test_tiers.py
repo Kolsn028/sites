@@ -68,3 +68,41 @@ class Tiers(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(i.response.send_message.await_count,2)
         user.get_role.return_value=object();i.guild_id=42
         self.assertFalse(await can_review(bot,i))
+
+    async def test_access_repair_includes_archive_and_is_repeat_safe(self):
+        from collections import defaultdict
+        import asyncio
+        from bot.tiers import sync_reviewers
+        reviewer=SimpleNamespace(id=50,bot=False,get_role=lambda rid:rid==TIERCHECK_ROLE_ID)
+        thread=MagicMock(spec=discord.Thread);thread.id=80;thread.archived=True;thread.locked=True
+        thread.parent=SimpleNamespace(topic=f'colombo:tier:1:999:{GUILD_ID}')
+        present=[]
+        thread.fetch_members=AsyncMock(side_effect=lambda:present.copy())
+        async def add(m):present.append(SimpleNamespace(id=m.id))
+        thread.add_user=AsyncMock(side_effect=add);thread.edit=AsyncMock()
+        guild=SimpleNamespace(id=GUILD_ID,chunked=True,get_role=lambda _:SimpleNamespace(members=[reviewer]),get_member=lambda _:reviewer,fetch_channel=AsyncMock(return_value=thread))
+        bot=SimpleNamespace(user=SimpleNamespace(id=999),operation_locks=defaultdict(asyncio.Lock),db=SimpleNamespace(_all=AsyncMock(return_value=[{'member_id':10,'thread_id':80}])))
+        self.assertEqual(await sync_reviewers(bot,guild,reviewer),(1,0))
+        self.assertEqual(thread.edit.call_args_list[-1].kwargs['archived'],True)
+        self.assertEqual(thread.edit.call_args_list[-1].kwargs['locked'],True)
+        self.assertEqual(await sync_reviewers(bot,guild,reviewer),(0,0))
+        thread.add_user.assert_awaited_once()
+        # A similarly named channel outside this bot's tier panels is never touched.
+        present.clear();thread.parent.topic='colombo:tier:1:other:server'
+        self.assertEqual(await sync_reviewers(bot,guild,reviewer),(0,0))
+        thread.add_user.assert_awaited_once()
+
+    async def test_access_repair_restores_archive_even_when_invitation_fails(self):
+        from collections import defaultdict
+        import asyncio
+        from bot.tiers import sync_reviewers
+        reviewer=SimpleNamespace(id=50,bot=False,get_role=lambda rid:rid==TIERCHECK_ROLE_ID)
+        thread=MagicMock(spec=discord.Thread);thread.archived=True;thread.locked=True
+        thread.parent=SimpleNamespace(topic=f'colombo:tier:2:999:{GUILD_ID}')
+        thread.fetch_members=AsyncMock(return_value=[]);thread.edit=AsyncMock()
+        thread.add_user=AsyncMock(side_effect=discord.Forbidden(SimpleNamespace(status=403,reason='Forbidden'),'missing permissions'))
+        guild=SimpleNamespace(id=GUILD_ID,chunked=True,get_role=lambda _:SimpleNamespace(members=[reviewer]),get_member=lambda _:reviewer,fetch_channel=AsyncMock(return_value=thread))
+        bot=SimpleNamespace(user=SimpleNamespace(id=999),operation_locks=defaultdict(asyncio.Lock),db=SimpleNamespace(_all=AsyncMock(return_value=[{'member_id':10,'thread_id':80}])))
+        self.assertEqual(await sync_reviewers(bot,guild,reviewer),(0,1))
+        self.assertTrue(thread.edit.call_args.kwargs['archived'])
+        self.assertTrue(thread.edit.call_args.kwargs['locked'])
