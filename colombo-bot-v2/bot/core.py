@@ -147,6 +147,11 @@ class ColomboBot(commands.Bot):
             except discord.Forbidden:
                 print("Colombo autorole: проверь Manage Roles и положение роли бота")
 
+    async def on_member_update(self, before, after):
+        from .tiers import GUILD_ID, TIERCHECK_ROLE_ID, sync_reviewers
+        if after.guild.id == GUILD_ID and not after.bot and after.get_role(TIERCHECK_ROLE_ID) and not before.get_role(TIERCHECK_ROLE_ID):
+            await sync_reviewers(self, after.guild, after)
+
     async def can_manage(self, member):
         cfg = await self.db.get_config(member.guild.id)
         return is_leader(member, cfg) or has_role(member, cfg, ('dep_leader_role_id',)) or member.guild_permissions.administrator

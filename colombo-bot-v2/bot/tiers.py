@@ -74,6 +74,13 @@ class TierPanelView(SafeView):
         if i.guild_id!=GUILD_ID or len(parts)!=5 or parts[:2]!=['colombo','tier'] or parts[2] not in ('1','2','3') or parts[3:]!=[str(self.bot.user.id),str(i.guild_id)]:return await i.response.send_message('Канал тира не настроен.',ephemeral=True)
         await i.response.send_modal(TierModal(self.bot,int(parts[2])))
 
+    @discord.ui.button(label='Восстановить доступ к заявкам',emoji='🔑',style=discord.ButtonStyle.secondary,custom_id='colombo:tier:restore_access')
+    async def restore_access(self,i,_):
+        if not await can_review(self.bot,i):return await i.response.send_message('Нужна роль tiercheck.',ephemeral=True)
+        await i.response.defer(ephemeral=True,thinking=True)
+        added,failed=await sync_reviewers(self.bot,i.guild,i.user)
+        await i.followup.send(f'Доступ проверен. Добавлено веток: {added}. Ошибок: {failed}. Архивные заявки остаются закрытыми.',ephemeral=True)
+
 class TierDecision(SafeModal):
     reason=discord.ui.TextInput(label='Комментарий / причина отказа',style=discord.TextStyle.paragraph,max_length=700,min_length=3)
     def __init__(self,bot,accepted):super().__init__(title='Одобрить тир' if accepted else 'Причина отказа',timeout=300);self.bot=bot;self.accepted=accepted
@@ -143,15 +150,36 @@ async def install(bot,guild):
         else:await ch.send(embed=panel(tier),view=TierPanelView(bot),allowed_mentions=discord.AllowedMentions.none())
         print(f'Tier channel ready | guild={guild.id} | tier={tier} | channel={ch.id}')
 
-    # Existing pending applications must also be accessible to the new reviewers.
+    await sync_reviewers(bot,guild)
+
+async def sync_reviewers(bot,guild,member=None):
+    if guild.id!=GUILD_ID:return
+    role=guild.get_role(TIERCHECK_ROLE_ID)
+    if not role:return
     if not guild.chunked:await guild.chunk(cache=True)
-    pending=await bot.db._all("SELECT thread_id FROM progress_requests WHERE guild_id=? AND kind IN ('tier_1','tier_2','tier_3') AND status IN ('pending','applying')",(guild.id,))
-    for row in pending:
-        try:
-            thread=await guild.fetch_channel(row['thread_id'])
-            if not isinstance(thread,discord.Thread) or not thread.parent or not (thread.parent.topic or '').startswith(f'colombo:tier:'):continue
-            members={m.id for m in await thread.fetch_members()}
-            for member in reviewer_role.members:
-                if not member.bot and member.id not in members:await thread.add_user(member)
-        except discord.NotFound:continue
-    print(f'Tiercheck access ready | guild={guild.id} | pending={len(pending)}')
+    reviewers=[member] if member else list(role.members)
+    reviewers=[m for m in reviewers if not m.bot and m.get_role(TIERCHECK_ROLE_ID)]
+    rows=await bot.db._all("SELECT member_id,thread_id FROM progress_requests WHERE guild_id=? AND kind IN ('tier_1','tier_2','tier_3')",(guild.id,))
+    added=0;failed=0
+    for row in rows:
+        async with bot.operation_locks[('tier_member',guild.id,row['member_id'])]:
+            try:
+                thread=await guild.fetch_channel(row['thread_id'])
+                if not isinstance(thread,discord.Thread) or not thread.parent:continue
+                valid={f'colombo:tier:{tier}:{bot.user.id}:{guild.id}' for tier in TIER_ROLES}
+                if thread.parent.topic not in valid:continue
+                members={m.id for m in await thread.fetch_members()}
+                missing=[m for m in reviewers if m.id not in members and (guild.get_member(m.id) or m).get_role(TIERCHECK_ROLE_ID)]
+                if not missing:continue
+                archived,locked=thread.archived,thread.locked
+                try:
+                    if archived:await thread.edit(archived=False,reason='Colombo: восстановление доступа tiercheck')
+                    for m in missing:
+                        await thread.add_user(m);added+=1
+                finally:
+                    if archived:await thread.edit(archived=True,locked=locked,reason='Colombo: сохранение архива заявки')
+            except discord.NotFound:continue
+            except discord.DiscordException as exc:
+                failed+=1;print(f'Tiercheck access error | guild={guild.id} | thread={row["thread_id"]}: {exc}')
+    print(f'Tiercheck access restored | guild={guild.id} | applications={len(rows)} | added={added} | failed={failed}')
+    return added,failed
