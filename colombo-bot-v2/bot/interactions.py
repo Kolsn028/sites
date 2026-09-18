@@ -14,10 +14,13 @@ async def report_error(interaction, error):
         message = str(error)
     else:
         message = 'Не удалось завершить действие. Администратор может проверить журнал бота и настройки `/setup_auto`.'
-    if interaction.response.is_done():
-        await interaction.followup.send(message, ephemeral=True)
-    else:
-        await interaction.response.send_message(message, ephemeral=True)
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+    except discord.NotFound:
+        log.warning('Interaction expired before error could be delivered')
 
 class SafeModal(discord.ui.Modal):
     async def on_error(self, interaction, error):
@@ -33,7 +36,10 @@ def serialized(kind, by_user=False):
         @functools.wraps(func)
         async def wrapped(self, interaction, *args, **kwargs):
             target = interaction.user.id if by_user else interaction.channel_id
-            async with self.bot.operation_locks[(kind, interaction.guild_id, target)]:
+            lock=self.bot.operation_locks[(kind, interaction.guild_id, target)]
+            if lock.locked():
+                return await interaction.response.send_message('Действие уже выполняется. Дождись результата и повтори при необходимости.',ephemeral=True)
+            async with lock:
                 return await func(self, interaction, *args, **kwargs)
         return wrapped
     return decorate

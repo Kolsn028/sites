@@ -78,6 +78,10 @@ class Tiers(unittest.IsolatedAsyncioTestCase):
         thread.parent=SimpleNamespace(topic=f'colombo:tier:1:999:{GUILD_ID}')
         present=[]
         thread.fetch_members=AsyncMock(side_effect=lambda:present.copy())
+        async def fetch_one(uid):
+            if any(m.id==uid for m in present):return SimpleNamespace(id=uid)
+            raise discord.NotFound(SimpleNamespace(status=404,reason='missing'),'missing')
+        thread.fetch_member=AsyncMock(side_effect=fetch_one)
         async def add(m):present.append(SimpleNamespace(id=m.id))
         thread.add_user=AsyncMock(side_effect=add);thread.edit=AsyncMock()
         guild=SimpleNamespace(id=GUILD_ID,chunked=True,get_role=lambda _:SimpleNamespace(members=[reviewer]),get_member=lambda _:reviewer,fetch_channel=AsyncMock(return_value=thread))
@@ -100,6 +104,7 @@ class Tiers(unittest.IsolatedAsyncioTestCase):
         thread=MagicMock(spec=discord.Thread);thread.archived=True;thread.locked=True
         thread.parent=SimpleNamespace(topic=f'colombo:tier:2:999:{GUILD_ID}')
         thread.fetch_members=AsyncMock(return_value=[]);thread.edit=AsyncMock()
+        thread.fetch_member=AsyncMock(side_effect=discord.NotFound(SimpleNamespace(status=404,reason='missing'),'missing'))
         thread.add_user=AsyncMock(side_effect=discord.Forbidden(SimpleNamespace(status=403,reason='Forbidden'),'missing permissions'))
         guild=SimpleNamespace(id=GUILD_ID,chunked=True,get_role=lambda _:SimpleNamespace(members=[reviewer]),get_member=lambda _:reviewer,fetch_channel=AsyncMock(return_value=thread))
         bot=SimpleNamespace(user=SimpleNamespace(id=999),operation_locks=defaultdict(asyncio.Lock),db=SimpleNamespace(_all=AsyncMock(return_value=[{'member_id':10,'thread_id':80}])))

@@ -1,6 +1,7 @@
 """Repeatable case recovery, dated decisions and two-hour recruiter reminders."""
 from datetime import datetime, timezone, timedelta
 import discord
+from .performance import edit_if_changed
 from .interactions import SafeModal
 from .roles import application_recruiters, HIGH_KEYS, has_role, is_leader
 from .ui import base_embed
@@ -156,7 +157,7 @@ async def refresh_interface(bot,guild):
                 kwargs={'view':ApplicationPanelView(bot)}
             if kind=='contract': kwargs={'embed':contract_panel_embed()}
             if kind=='promotion': kwargs={'embed':promotion_panel_embed()}
-            await msg.edit(**kwargs,allowed_mentions=discord.AllowedMentions.none())
+            await edit_if_changed(msg,**kwargs,allowed_mentions=discord.AllowedMentions.none())
         except discord.NotFound: continue
     for row in await bot.db._all('SELECT * FROM family_events WHERE guild_id=? AND message_id IS NOT NULL',(guild.id,)):
         try:
@@ -166,7 +167,7 @@ async def refresh_interface(bot,guild):
             view=EventView(bot)
             if row['status']!='open':
                 for item in view.children: item.disabled=item.custom_id!='colombo:event:manage'
-            await msg.edit(embed=await card(bot.db,row),view=view,allowed_mentions=discord.AllowedMentions.none())
+            await edit_if_changed(msg,embed=await card(bot.db,row),view=view,allowed_mentions=discord.AllowedMentions.none())
         except discord.NotFound: continue
     for case in await bot.db._all('SELECT member_id FROM personal_cases WHERE guild_id=?',(guild.id,)):
         await refresh_member(bot,guild,case['member_id'],create=False)

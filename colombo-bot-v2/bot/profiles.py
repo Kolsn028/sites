@@ -2,6 +2,7 @@
 import math
 from datetime import datetime, timezone, timedelta
 import discord
+from .performance import edit_if_changed
 from .roles import HIGH_KEYS, has_role, is_leader
 from .ui import base_embed
 from .interactions import SafeView
@@ -161,7 +162,7 @@ async def refresh_member(bot,guild,member_id,create=True):
                 if old.author.id != bot.user.id: continue
                 is_card=any(getattr(c,'custom_id',None)=='colombo:profile:open' for row in old.components for c in row.children)
                 if is_card and old.id != case.get('profile_message_id'):
-                    await old.edit(embed=base_embed('📁 Личное дело','Подробная карточка доступна High и выше.'),view=ProfileLauncher(bot),allowed_mentions=discord.AllowedMentions.none())
+                    await edit_if_changed(old,embed=base_embed('📁 Личное дело','Подробная карточка доступна High и выше.'),view=ProfileLauncher(bot),allowed_mentions=discord.AllowedMentions.none())
             e=base_embed('📁 Личное дело', 'Отправляй сюда отчёты и доказательства. Подробная карточка и история доступны High и выше.')
             # Permanent card has the latest five entries; filters open privately per viewer.
             msg=None
@@ -172,7 +173,7 @@ async def refresh_member(bot,guild,member_id,create=True):
                 async for old in ch.history(limit=100):
                     if old.author.id==bot.user.id and any(getattr(c,'custom_id',None)=='colombo:profile:open' for row in old.components for c in row.children):
                         msg=old;break
-            if msg:await msg.edit(embed=e,view=ProfileLauncher(bot),allowed_mentions=discord.AllowedMentions.none())
+            if msg:await edit_if_changed(msg,embed=e,view=ProfileLauncher(bot),allowed_mentions=discord.AllowedMentions.none())
             else:msg=await ch.send(embed=e,view=ProfileLauncher(bot),allowed_mentions=discord.AllowedMentions.none())
             async with bot.db.lock:
                 await bot.db.conn.execute('UPDATE personal_cases SET profile_message_id=? WHERE id=?',(msg.id,case['id']));await bot.db.conn.commit()

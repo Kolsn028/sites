@@ -1,6 +1,8 @@
 """Tier applications: explicit roles, private review and resumable role changes."""
 import json
+import asyncio
 import discord
+from .performance import edit_if_changed
 from .interactions import SafeModal,SafeView,private_thread
 from .roles import STAFF_KEYS,configured_roles
 from .ui import base_embed
@@ -142,11 +144,11 @@ async def install(bot,guild):
         matches=[c for c in channels if isinstance(c,discord.TextChannel) and (c.topic==topic or (c.category_id==category.id and c.name==name))]
         if len(matches)>1:raise ValueError(f'Найдены дубли канала {name}.')
         ch=matches[0] if matches else await guild.create_text_channel(name,category=category,topic=topic,overwrites=ow)
-        if matches:await ch.edit(category=category,topic=topic,overwrites=ow)
+        if matches and (ch.category_id!=category.id or ch.topic!=topic or ch.overwrites!=ow):await ch.edit(category=category,topic=topic,overwrites=ow)
         message=None
         async for m in ch.history(limit=50):
             if m.author.id==bot.user.id and any(getattr(c,'custom_id',None)=='colombo:tier:apply' for row in m.components for c in row.children):message=m;break
-        if message:await message.edit(embed=panel(tier),view=TierPanelView(bot),allowed_mentions=discord.AllowedMentions.none())
+        if message:await edit_if_changed(message,embed=panel(tier),view=TierPanelView(bot),allowed_mentions=discord.AllowedMentions.none())
         else:await ch.send(embed=panel(tier),view=TierPanelView(bot),allowed_mentions=discord.AllowedMentions.none())
         print(f'Tier channel ready | guild={guild.id} | tier={tier} | channel={ch.id}')
 
@@ -154,9 +156,21 @@ async def install(bot,guild):
 
 async def sync_reviewers(bot,guild,member=None):
     if guild.id!=GUILD_ID:return
+    if not hasattr(bot,'_tier_sync_tasks'):bot._tier_sync_tasks={}
+    key=(guild.id,member.id if member else None)
+    existing=bot._tier_sync_tasks.get(key)
+    if existing:return await asyncio.shield(existing)
+    async def run():
+        try:return await _sync_reviewers(bot,guild,member)
+        finally:bot._tier_sync_tasks.pop(key,None)
+    task=asyncio.create_task(run());bot._tier_sync_tasks[key]=task
+    return await asyncio.shield(task)
+
+async def _sync_reviewers(bot,guild,member=None):
+    if guild.id!=GUILD_ID:return
     role=guild.get_role(TIERCHECK_ROLE_ID)
     if not role:return
-    if not guild.chunked:await guild.chunk(cache=True)
+    if member is None and not guild.chunked:await guild.chunk(cache=True)
     reviewers=[member] if member else list(role.members)
     reviewers=[m for m in reviewers if not m.bot and m.get_role(TIERCHECK_ROLE_ID)]
     rows=await bot.db._all("SELECT member_id,thread_id FROM progress_requests WHERE guild_id=? AND kind IN ('tier_1','tier_2','tier_3')",(guild.id,))
@@ -168,7 +182,11 @@ async def sync_reviewers(bot,guild,member=None):
                 if not isinstance(thread,discord.Thread) or not thread.parent:continue
                 valid={f'colombo:tier:{tier}:{bot.user.id}:{guild.id}' for tier in TIER_ROLES}
                 if thread.parent.topic not in valid:continue
-                members={m.id for m in await thread.fetch_members()}
+                if member is None:
+                    members={m.id for m in await thread.fetch_members()}
+                else:
+                    try:await thread.fetch_member(member.id);members={member.id}
+                    except discord.NotFound:members=set()
                 missing=[m for m in reviewers if m.id not in members and (guild.get_member(m.id) or m).get_role(TIERCHECK_ROLE_ID)]
                 if not missing:continue
                 archived,locked=thread.archived,thread.locked

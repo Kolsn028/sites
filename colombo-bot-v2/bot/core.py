@@ -4,6 +4,7 @@ from collections import defaultdict
 from datetime import date, datetime, timezone
 from aiohttp import web
 import discord
+from .performance import edit_if_changed, coalesced_panel
 from discord.ext import commands, tasks
 from .ui import base_embed
 from .roles import has_role, is_leader, is_family, may_recruit, may_review_reports, configured_roles, HIGH_KEYS, STAFF_KEYS, may_promote, may_review_vacation, may_manage_recruiters
@@ -61,6 +62,8 @@ class ColomboBot(commands.Bot):
         if self.application_reminders.is_running(): self.application_reminders.cancel()
         if self.housekeeping.is_running(): self.housekeeping.cancel()
         if self.health_runner: await self.health_runner.cleanup()
+        running=[s['task'] for s in getattr(self,'_panel_tasks',{}).values()]+list(getattr(self,'_tier_sync_tasks',{}).values())
+        if running:await asyncio.gather(*running,return_exceptions=True)
         if hasattr(self, 'backups'):
             await self.backups.close()
         await self.db.close(); await super().close()
@@ -226,6 +229,7 @@ class ColomboBot(commands.Bot):
         e.add_field(name="Тип",value="❔ Не выбран",inline=True); e.add_field(name="Баллы",value="—",inline=True); e.add_field(name="Статус",value="🟡 Нужно выбрать тип",inline=False)
         review=await msg.reply(embed=e,view=ActivityClassifyView(self),mention_author=False); await self.db.update_activity(sid,review_message_id=review.id)
 
+    @coalesced_panel
     async def send_or_update_leaderboard(self,guild):
         c=await self.db.get_config(guild.id); rows=await self.db.leaderboard(guild.id,10); medals=["🥇","🥈","🥉"]; lines=[]
         for i,r in enumerate(rows): lines.append(f"{medals[i] if i<3 else f'`#{i+1}`'} <@{r['recruiter_id']}> — **{r['accepted_count']}** принято" + (f" · {r['rejected_count']} отказов" if r['rejected_count'] else ""))
@@ -233,10 +237,11 @@ class ColomboBot(commands.Bot):
         if not isinstance(ch,discord.TextChannel): return None
         mid=c.get("leaderboard_message_id")
         if mid:
-            try: m=await ch.fetch_message(mid); await m.edit(embed=e); return m
-            except discord.DiscordException: pass
+            try: m=await ch.fetch_message(mid); await edit_if_changed(m,embed=e); return m
+            except discord.NotFound: pass
         m=await ch.send(embed=e); await self.db.set_config(guild.id,leaderboard_message_id=m.id); return m
 
+    @coalesced_panel
     async def update_vacation_status(self,guild):
         c=await self.db.get_config(guild.id); rows=await self.db.active_vacations(guild.id); today=date.today(); lines=[]
         for r in rows:
@@ -245,8 +250,8 @@ class ColomboBot(commands.Bot):
         if not isinstance(ch,discord.TextChannel): return None
         mid=c.get("vacation_status_message_id")
         if mid:
-            try: m=await ch.fetch_message(mid); await m.edit(embed=e); return m
-            except discord.DiscordException: pass
+            try: m=await ch.fetch_message(mid); await edit_if_changed(m,embed=e); return m
+            except discord.NotFound: pass
         m=await ch.send(embed=e); await self.db.set_config(guild.id,vacation_status_message_id=m.id); return m
 
     async def inactive_members(self,guild,days):
@@ -259,6 +264,7 @@ class ColomboBot(commands.Bot):
             if d>=days: out.append((m,d,r["last_activity"]))
         return sorted(out,key=lambda x:x[1],reverse=True)
 
+    @coalesced_panel
     async def update_inactivity_report(self,guild):
         c=await self.db.get_config(guild.id); days=int(os.getenv("INACTIVITY_DAYS_DEFAULT","3")); rows=await self.inactive_members(guild,days); lines=[f"⚠️ {m.mention} — **{d} дн.**" for m,d,_ in rows[:30]]
         e=base_embed(f"📉 Контроль неактива • {days}+ дней","\n".join(lines) if lines else "✅ Участников с таким неактивом нет.",0xD64045 if lines else 0x3BAA72); e.set_footer(text="Одобренный отпуск автоматически исключает участника из неактива.")
@@ -266,8 +272,8 @@ class ColomboBot(commands.Bot):
         if not isinstance(ch,discord.TextChannel): return None
         mid=c.get("inactivity_report_message_id")
         if mid:
-            try: m=await ch.fetch_message(mid); await m.edit(embed=e); return m
-            except discord.DiscordException: pass
+            try: m=await ch.fetch_message(mid); await edit_if_changed(m,embed=e); return m
+            except discord.NotFound: pass
         m=await ch.send(embed=e); await self.db.set_config(guild.id,inactivity_report_message_id=m.id); return m
 
     async def expire_vacations(self,guild):
