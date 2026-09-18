@@ -1,6 +1,7 @@
 """Family event signups with staff-only creation and verified attendance."""
 from datetime import datetime, timezone, timedelta
 import discord
+from .performance import coalesced_panel, edit_if_changed
 from .roles import has_role, HIGH_KEYS, is_leader
 from .interactions import SafeView, SafeModal
 from .ui import base_embed
@@ -132,10 +133,19 @@ class AttendanceSelect(discord.ui.UserSelect):
                 return await i.followup.send('Присутствие подтверждает создатель МП, Leader или Deputy Leader.',ephemeral=True)
             await roster.confirm(self.bot.db,row['id'],self.values[0].id,i.user.id)
             msg=await i.channel.fetch_message(self.message_id)
-            await msg.edit(embed=await card(self.bot.db,row),allowed_mentions=discord.AllowedMentions.none())
+            await edit_if_changed(msg,embed=await card(self.bot.db,row),allowed_mentions=discord.AllowedMentions.none())
             from .profiles import refresh_member
             await refresh_member(self.bot,i.guild,self.values[0].id)
             await i.followup.send('Отметка присутствия и карточка игрока обновлены.',ephemeral=True)
+
+
+@coalesced_panel
+async def refresh_signup_card(bot,message):
+    async with bot.operation_locks[('event',message.guild.id,message.id)]:
+        row=await event_row(bot,message.guild.id,message.id)
+        if not row:return
+        current=await message.channel.fetch_message(message.id)
+        return await edit_if_changed(current,embed=await card(bot.db,row),allowed_mentions=discord.AllowedMentions.none())
 
 
 class EventView(SafeView):
@@ -151,8 +161,8 @@ class EventView(SafeView):
             row=await event_row(self.bot,i.guild_id,i.message.id)
             if not row: return await i.followup.send('Сбор не найден.',ephemeral=True)
             result=await signup(self.bot.db,row['id'],i.user.id,leave,seat)
-            await i.message.edit(embed=await card(self.bot.db,row),allowed_mentions=discord.AllowedMentions.none())
-            await i.followup.send(result,ephemeral=True)
+        await i.followup.send(result,ephemeral=True)
+        await refresh_signup_card(self.bot,i.message)
     @discord.ui.button(label='Записаться',emoji='➕',style=discord.ButtonStyle.success,custom_id='colombo:event:join')
     async def join(self,i,_): await self.change(i)
     @discord.ui.button(label='В резерв',emoji='🕒',style=discord.ButtonStyle.secondary,custom_id='colombo:event:reserve')
@@ -183,7 +193,7 @@ class EventView(SafeView):
             row['status']='finished'
             view=EventView(self.bot)
             for item in view.children: item.disabled=item.custom_id!='colombo:event:manage'
-            await i.message.edit(embed=await card(self.bot.db,row),view=view,allowed_mentions=discord.AllowedMentions.none())
+            await edit_if_changed(i.message,embed=await card(self.bot.db,row),view=view,allowed_mentions=discord.AllowedMentions.none())
             await i.followup.send('Сбор завершён. Список сохранён; можно отметить присутствие.',ephemeral=True)
 
 
@@ -206,7 +216,7 @@ class MoveSelect(discord.ui.UserSelect):
             if not row:raise ValueError('Сбор не найден.')
             await roster.move(self.bot.db,row['id'],self.values[0].id,self.seat,i.user.id)
             msg=await i.channel.fetch_message(self.message_id)
-            await msg.edit(embed=await card(self.bot.db,row),allowed_mentions=discord.AllowedMentions.none())
+            await edit_if_changed(msg,embed=await card(self.bot.db,row),allowed_mentions=discord.AllowedMentions.none())
             await i.followup.send('Состав обновлён.',ephemeral=True)
 
 
@@ -225,7 +235,7 @@ class LimitsModal(SafeModal,title='Лимиты сбора'):
             await roster.limits(self.bot.db,row['id'],main,reserve,i.user.id)
             row=await event_row(self.bot,i.guild_id,self.message_id)
             msg=await i.channel.fetch_message(self.message_id)
-            await msg.edit(embed=await card(self.bot.db,row),allowed_mentions=discord.AllowedMentions.none())
+            await edit_if_changed(msg,embed=await card(self.bot.db,row),allowed_mentions=discord.AllowedMentions.none())
             await i.followup.send('Лимиты обновлены.',ephemeral=True)
 
 
@@ -260,7 +270,7 @@ class RosterManageView(SafeView):
             row['status']='finished';view=EventView(self.bot)
             for item in view.children: item.disabled=item.custom_id!='colombo:event:manage'
             msg=await i.channel.fetch_message(self.message_id)
-            await msg.edit(embed=await card(self.bot.db,row),view=view,allowed_mentions=discord.AllowedMentions.none())
+            await edit_if_changed(msg,embed=await card(self.bot.db,row),view=view,allowed_mentions=discord.AllowedMentions.none())
             await i.followup.send('Сбор завершён. Подтверждение присутствия доступно в управлении.',ephemeral=True)
 
     @discord.ui.button(label='Повторить сбор',emoji='🔁',row=3)

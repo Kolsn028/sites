@@ -1,5 +1,6 @@
 """Private management and self-service request status, with permission checks on every click."""
 import discord
+from .performance import edit_if_changed
 from .interactions import SafeView
 from .roles import may_manage_recruiters,HIGH_KEYS,configured_roles
 from .ui import base_embed
@@ -133,6 +134,6 @@ async def install_hub(bot,guild):
     async for old in ch.history(limit=50):
         if old.author.id==bot.user.id and any(getattr(c,'custom_id',None)=='colombo:hub:queue' for row in old.components for c in row.children):msg=old;break
     e=base_embed('COLOMBO • Управление','Заявки, отдых, мероприятия и игроки — в одной панели.\nДоступ: **High · Deputy Leader · Leader**.',0xA82D40)
-    if msg:await msg.edit(embed=e,view=ManagementView(bot),allowed_mentions=discord.AllowedMentions.none())
+    if msg:await edit_if_changed(msg,embed=e,view=ManagementView(bot),allowed_mentions=discord.AllowedMentions.none())
     else:await ch.send(embed=e,view=ManagementView(bot),allowed_mentions=discord.AllowedMentions.none())
     print(f'Management hub ready | guild={guild.id} | channel={ch.id}')
