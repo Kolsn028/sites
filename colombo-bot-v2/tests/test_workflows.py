@@ -135,7 +135,7 @@ class Workflows(unittest.IsolatedAsyncioTestCase):
         modal=VacationModal(bot); modal.reason._value='Поездка'; modal.days._value='7'
         thread=MagicMock(spec=discord.Thread); thread.id=55
         thread.send=AsyncMock(return_value=SimpleNamespace(id=66))
-        with patch('bot.views.private_thread',new=AsyncMock(return_value=thread)) as create:
+        with patch('bot.forms.vacations.private_thread',new=AsyncMock(return_value=thread)) as create:
             await modal.on_submit(i)
             row=await self.db.pending_vacation_for_member(11,44)
             self.assertEqual(row['thread_id'],55)
