@@ -13,13 +13,13 @@ GUILD_ID, MEMBER_ID, ROLE_ID = 100, 200, 300
 
 class RequestedHigh(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.env = patch.dict('os.environ', {'REQUESTED_HIGH_GUILD_ID':str(GUILD_ID),
-            'REQUESTED_HIGH_MEMBER_ID':str(MEMBER_ID), 'REQUESTED_HIGH_ROLE_ID':str(ROLE_ID)})
+        self.env = patch.dict('os.environ', {'REQUESTED_MAIN_GUILD_ID':str(GUILD_ID),
+            'REQUESTED_MAIN_MEMBER_ID':str(MEMBER_ID), 'REQUESTED_MAIN_ROLE_ID':str(ROLE_ID)})
         self.env.start()
         self.tmp = tempfile.TemporaryDirectory()
         self.db = Database(self.tmp.name + '/db')
         await self.db.connect()
-        await self.db.set_config(GUILD_ID, high_staff_role_id=ROLE_ID)
+        await self.db.set_config(GUILD_ID, main_role_id=ROLE_ID)
         self.held = set()
         role = MagicMock(spec=discord.Role)
         role.id = ROLE_ID
