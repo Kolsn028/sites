@@ -28,20 +28,35 @@ class SetupAccess(unittest.IsolatedAsyncioTestCase):
             response=SimpleNamespace(defer=AsyncMock()),
             followup=SimpleNamespace(send=AsyncMock()))
 
-    async def test_both_commands_gate_roles_and_forward_main(self):
-        for name in ('setup', 'setup_auto'):
-            command = self.bot.tree.get_command(name)
-            self.assertTrue({'main','guest','test','colombo','high'}.issubset({p.name for p in command.parameters}))
-            self.assertNotIn('ass_deputy', {p.name for p in command.parameters})
-            for role_id in (1, 2, 3):
-                self.assertTrue(await command.checks[0](self.interaction(role_id)))
-            for role_id in (4, 5, None):
+    async def test_only_leader_can_setup_and_auto_is_removed(self):
+        self.assertIsNone(self.bot.tree.get_command('setup_auto'))
+        command = self.bot.tree.get_command('setup')
+        self.assertTrue({'main','guest','test','colombo','high'}.issubset({p.name for p in command.parameters}))
+        self.assertTrue(await command.checks[0](self.interaction(1)))
+        for role_id in (2, 3, 4, 5, None):
+            for owner in (False, True):
+                i = self.interaction(role_id, owner=owner)
+                i.user.guild_permissions = discord.Permissions(administrator=True)
                 with self.assertRaises(app_commands.CheckFailure):
-                    await command.checks[0](self.interaction(role_id))
-            self.assertTrue(await command.checks[0](self.interaction(None, owner=True)))
-            selected = object()
-            i = self.interaction(3)
-            with patch('bot.provisioning.provision', new_callable=AsyncMock) as provision:
-                await command.callback(i, main=selected)
-                self.assertIs(provision.call_args.args[2]['main_role_id'], selected)
+                    await command.checks[0](i)
+        selected = object()
+        with patch('bot.provisioning.provision', new_callable=AsyncMock) as provision:
+            await command.callback(self.interaction(1), main=selected)
+            self.assertIs(provision.call_args.args[2]['main_role_id'], selected)
 
+    async def test_guild_sync_removes_old_auto_command(self):
+        from collections import defaultdict
+        import asyncio
+        from bot.core import ColomboBot
+        guild = SimpleNamespace(id=100)
+        stale = SimpleNamespace(name='setup_auto', options=[])
+        setup = SimpleNamespace(name='setup', options=[SimpleNamespace(name=n) for n in ('main','guest','test','colombo')])
+        registered = [setup, stale]
+        async def sync(**kwargs):
+            registered[:] = [setup]
+        tree = SimpleNamespace(copy_global_to=MagicMock(), sync=AsyncMock(side_effect=sync),
+                               fetch_commands=AsyncMock(side_effect=lambda **kw: registered))
+        bot = SimpleNamespace(tree=tree, operation_locks=defaultdict(asyncio.Lock))
+        await ColomboBot.sync_guild_commands(bot, guild)
+        self.assertEqual([c.name for c in registered], ['setup'])
+        self.assertEqual(bot._commands_synced, {100})

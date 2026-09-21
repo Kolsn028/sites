@@ -21,7 +21,7 @@ def register_commands(bot):
             cfg = await bot.db.get_config(i.guild_id)
             if may_setup(i.user, cfg, named_role):
                 return True
-        raise app_commands.CheckFailure('Настройка доступна только High, Deputy Leader, Leader и владельцу сервера.')
+        raise app_commands.CheckFailure('Настройка доступна только участникам с ролью Leader.')
 
     @app_commands.guild_only()
     @app_commands.check(setup_access)
@@ -52,7 +52,6 @@ def register_commands(bot):
             await i.followup.send("Проверь права бота и положение его роли. Затем повтори /setup — готовые каналы сохранятся.", ephemeral=True)
 
     bot.tree.command(name="setup", description="Роли Colombo, каналы и панели")(setup)
-    bot.tree.command(name="setup_auto", description="Автоматическая настройка ролей и каналов Colombo")(setup)
 
     @bot.tree.command(name="panel_application",description="Отправить панель подачи заявки")
     @admin_only()
@@ -183,8 +182,8 @@ def register_commands(bot):
     @bot.tree.error
     async def on_error(i,error):
         print('App command error:',repr(error)); text='⛔ Нужна роль Leader, Deputy Leader или права администратора.' if isinstance(error,app_commands.CheckFailure) else '⚠️ Произошла ошибка. Проверь права и `/setup`.'
-        if isinstance(error, app_commands.CheckFailure) and i.command and i.command.name in ('setup', 'setup_auto'):
-            text = '⛔ Настройка доступна только High, Deputy Leader, Leader и владельцу сервера.'
+        if isinstance(error, app_commands.CheckFailure) and i.command and i.command.name == 'setup':
+            text = '⛔ Настройка доступна только участникам с ролью Leader.'
         try:
             if i.response.is_done(): await i.followup.send(text,ephemeral=True)
             else: await i.response.send_message(text,ephemeral=True)

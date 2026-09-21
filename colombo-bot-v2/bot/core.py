@@ -126,7 +126,10 @@ class ColomboBot(commands.Bot):
                 self.tree.copy_global_to(guild=guild)
                 await self.tree.sync(guild=guild)
                 registered = await self.tree.fetch_commands(guild=guild)
-                for name in ('setup', 'setup_auto'):
+                if any(c.name == 'setup_auto' for c in registered):
+                    raise RuntimeError('setup_auto still registered after sync')
+                print(f'Slash removed | guild={guild.id} | command=setup_auto')
+                for name in ('setup',):
                     command = next(c for c in registered if c.name == name)
                     options = [p.name for p in command.options]
                     if not {'main', 'guest', 'test', 'colombo'}.issubset(options):

@@ -72,9 +72,11 @@ def may_decide_application(member, cfg, application):
 
 
 def may_setup(member, cfg, resolve_role):
-    if may_manage_recruiters(member, cfg):
-        return True
+    """Only the configured Leader role; owner/Administrator are not bypasses."""
+    leader_id = cfg.get('leader_role_id')
+    if leader_id:
+        return bool(member.get_role(leader_id))
     if not cfg.get('role_schema_version'):
-        return any((role := resolve_role(member.guild, key)) and member.get_role(role.id)
-                   for key in HIGH_KEYS)
+        role = resolve_role(member.guild, 'leader_role_id')
+        return bool(role and member.get_role(role.id))
     return False

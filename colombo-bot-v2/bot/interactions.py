@@ -13,7 +13,7 @@ async def report_error(interaction, error):
     elif isinstance(error, ValueError):
         message = str(error)
     else:
-        message = 'Не удалось завершить действие. Администратор может проверить журнал бота и настройки `/setup_auto`.'
+        message = 'Не удалось завершить действие. Leader может проверить журнал бота и настройки `/setup`.'
     try:
         if interaction.response.is_done():
             await interaction.followup.send(message, ephemeral=True)
