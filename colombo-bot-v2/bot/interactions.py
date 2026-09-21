@@ -44,6 +44,12 @@ def serialized(kind, by_user=False):
         return wrapped
     return decorate
 
+async def ensure_members_cached(guild):
+    # role.members is incomplete until the guild is chunked
+    if not guild.chunked:
+        await guild.chunk(cache=True)
+
+
 async def private_thread(parent, member, roles, name, *, reviewers=None):
     """No public anchor: application text stays inside the private thread."""
     perms = parent.permissions_for(parent.guild.me)
@@ -53,8 +59,7 @@ async def private_thread(parent, member, roles, name, *, reviewers=None):
         raise ValueError('Проверь права бота в канале заявок: просмотр, сообщения, Embed Links, история, создание приватных веток и управление ветками.')
     if not parent.permissions_for(member).view_channel:
         raise ValueError('У участника нет доступа к родительскому каналу заявок. Администратор должен открыть просмотр этого канала; сами заявки останутся в приватных ветках.')
-    if not parent.guild.chunked:
-        await parent.guild.chunk(cache=True)
+    await ensure_members_cached(parent.guild)
     thread = await parent.create_thread(name=name[:100], type=discord.ChannelType.private_thread,
                                        invitable=False, auto_archive_duration=1440, reason='Colombo: приватная заявка')
     try:

@@ -14,7 +14,7 @@ async def can_review(bot,i):
     return isinstance(i.user, discord.Member) and may_review_tiers(i.user, i.guild_id)
 
 def panel(tier):
-    return base_embed(f'Повышение на тир {tier}','Прикрепи ссылки на откаты и расскажи, зачем тебе нужен тир.\nРассматривают **tiercheck**. При одобрении другие тиры заменяются выбранным.',0xA82D40)
+    return base_embed(f'Повышение на тир {tier}','Прикрепи ссылки на откаты и расскажи, зачем тебе нужен тир.\nДля каждой заявки создаётся отдельная приватная ветка; уведомления находятся внутри неё.\nРассматривают **tiercheck**. При одобрении другие тиры заменяются выбранным.',0xA82D40)
 
 from .services.ranks import award_tier
 
@@ -47,13 +47,11 @@ class TierModal(SafeModal):
                 await thread.delete(reason='Colombo: ошибка сохранения заявки');raise
             e=base_embed(f'Заявка #{rid} • тир {self.tier}',f'Участник: {i.user.mention}',0xD5A43A)
             for name,value in fields:e.add_field(name=name,value=value,inline=False)
-            try:await thread.send(embed=e,view=TierReviewView(self.bot),allowed_mentions=discord.AllowedMentions.none())
+            try:await thread.send(content=f'<@&{TIERCHECK_ROLE_ID}> · Новая заявка на тир {self.tier}',embed=e,view=TierReviewView(self.bot),allowed_mentions=discord.AllowedMentions(everyone=False,users=False,roles=[discord.Object(id=TIERCHECK_ROLE_ID)],replied_user=False))
             except Exception:
                 await self.bot.db.fail_progress(rid)
                 raise
             await i.followup.send(f'Заявка отправлена: {thread.mention}',ephemeral=True)
-            # Notify in the parent channel; application details stay in the private thread.
-            await i.channel.send(f'<@&{TIERCHECK_ROLE_ID}> · Новая заявка на **тир {self.tier}**: {thread.mention}',allowed_mentions=discord.AllowedMentions(everyone=False,users=False,roles=[discord.Object(id=TIERCHECK_ROLE_ID)],replied_user=False))
 
 class TierPanelView(SafeView):
     def __init__(self,bot):super().__init__(timeout=None);self.bot=bot
@@ -96,12 +94,14 @@ class TierDecision(SafeModal):
             e=base_embed(f'✅ Тир {tier} одобрен' if self.accepted else f'❌ Отказ в тире {tier}',f"Участник: <@{row['member_id']}>\nРассмотрел: {i.user.mention}\n"+('Комментарий: ' if self.accepted else 'Причина отказа: ')+discord.utils.escape_markdown(reason),0x3BAA72 if self.accepted else 0xD64045)
             await i.channel.send(embed=e,allowed_mentions=discord.AllowedMentions.none())
             await self.bot.db.set_progress_decision(row['id'], status, i.user.id, reason)
+            from .thread_archive import schedule_archive
+            await schedule_archive(self.bot, i.channel)
             dm=True
             try:
                 member=await i.guild.fetch_member(row['member_id']);await member.send(embed=e,allowed_mentions=discord.AllowedMentions.none())
             except discord.DiscordException:dm=False
             await i.followup.send('Решение сохранено. '+('Игроку отправлено личное сообщение.' if dm else 'Личные сообщения закрыты или недоступны; результат оставлен в ветке.'),ephemeral=True)
-            await i.channel.edit(archived=True,locked=True)
+
 
 class TierReviewView(SafeView):
     def __init__(self,bot):super().__init__(timeout=None);self.bot=bot

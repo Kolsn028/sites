@@ -111,3 +111,24 @@ class Tiers(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await sync_reviewers(bot,guild,reviewer),(0,1))
         self.assertTrue(thread.edit.call_args.kwargs['archived'])
         self.assertTrue(thread.edit.call_args.kwargs['locked'])
+
+    async def test_new_application_notifies_only_inside_private_thread(self):
+        import asyncio
+        from collections import defaultdict
+        from unittest.mock import patch
+        user=MagicMock(spec=discord.Member);user.id=10;user.display_name='Applicant'
+        guild=SimpleNamespace(id=GUILD_ID,get_role=lambda _:object())
+        channel=SimpleNamespace(topic=f'colombo:tier:2:999:{GUILD_ID}',send=AsyncMock())
+        thread=SimpleNamespace(id=88,mention='<#88>',send=AsyncMock())
+        bot=SimpleNamespace(user=SimpleNamespace(id=999),is_family_member=AsyncMock(return_value=True),
+            now_iso=lambda:'2026-09-21T00:00:00+00:00',operation_locks=defaultdict(asyncio.Lock),
+            db=SimpleNamespace(find_open_tier=AsyncMock(return_value=None),create_progress=AsyncMock(return_value=1)))
+        i=SimpleNamespace(guild_id=GUILD_ID,guild=guild,user=user,channel=channel,
+            response=SimpleNamespace(defer=AsyncMock()),followup=SimpleNamespace(send=AsyncMock()))
+        with patch('bot.tiers.private_thread',AsyncMock(return_value=thread)) as create:
+            await TierModal(bot,2).on_submit(i)
+        create.assert_awaited_once()
+        channel.send.assert_not_awaited()
+        thread.send.assert_awaited_once()
+        self.assertIn(str(TIERCHECK_ROLE_ID),thread.send.call_args.kwargs['content'])
+        self.assertEqual([r.id for r in thread.send.call_args.kwargs['allowed_mentions'].roles],[TIERCHECK_ROLE_ID])

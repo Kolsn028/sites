@@ -51,7 +51,7 @@ class ColomboBot(commands.Bot):
                 g=discord.Object(id=gid); self.tree.copy_global_to(guild=g); await self.tree.sync(guild=g)
             else: await self.tree.sync()
         except Exception as e: print("Slash sync error:",e)
-        await self._start_health(); self.housekeeping.start(); self.application_reminders.start()
+        await self._start_health(); self.housekeeping.start(); self.application_reminders.start(); self.archive_worker.start()
         self.backups.watch_commits()
 
     async def _start_health(self):
@@ -60,9 +60,14 @@ class ColomboBot(commands.Bot):
         runner=web.AppRunner(app); await runner.setup(); await web.TCPSite(runner,"0.0.0.0",int(os.getenv("PORT","8080"))).start(); self.health_runner=runner
 
     async def close(self):
+        if self.archive_worker.is_running(): self.archive_worker.cancel()
         if self.application_reminders.is_running(): self.application_reminders.cancel()
         if self.housekeeping.is_running(): self.housekeeping.cancel()
         if self.health_runner: await self.health_runner.cleanup()
+        # archiving threads is cosmetic; don't let it delay shutdown
+        archives=list(getattr(self,'_archive_tasks',()))
+        for task in archives: task.cancel()
+        await asyncio.gather(*archives,return_exceptions=True)
         running=[s['task'] for s in getattr(self,'_panel_tasks',{}).values()]+list(getattr(self,'_tier_sync_tasks',{}).values())
         if running:await asyncio.gather(*running,return_exceptions=True)
         if hasattr(self, 'backups'):
@@ -77,12 +82,6 @@ class ColomboBot(commands.Bot):
         if getattr(self, '_layout_attempted', False):
             return
         self._layout_attempted = True
-        from .requested_role_removal import apply as apply_requested_high
-        for guild in self.guilds:
-            try:
-                await apply_requested_high(self, guild)
-            except Exception as exc:
-                print(f'Requested role removal failed | guild={guild.id}: {type(exc).__name__}: {exc}')
         from .recovery_september import recover
         for guild in self.guilds:
             try:
@@ -310,3 +309,16 @@ class ColomboBot(commands.Bot):
 
     @application_reminders.before_loop
     async def before_application_reminders(self): await self.wait_until_ready()
+
+    @tasks.loop(minutes=1)
+    async def archive_worker(self):
+        from .thread_archive import process_archives
+        for guild in self.guilds:
+            try:
+                await process_archives(self, guild)
+            except Exception as exc:
+                print(f'Archive queue error | guild={guild.id}: {type(exc).__name__}: {exc}')
+
+    @archive_worker.before_loop
+    async def before_archive_worker(self):
+        await self.wait_until_ready()

@@ -34,12 +34,14 @@ class RejectionModal(SafeModal,title='Причина отказа'):
                                    accepted=False, reason=reason, expected_id=self.app_id)
             except ApplicationDecisionError as exc:
                 return await i.followup.send(str(exc), ephemeral=True)
+            from .thread_archive import schedule_archive
+            await schedule_archive(self.bot, i.channel)
             await i.followup.send('Отказ и причина сохранены в истории игрока.',ephemeral=True)
             await i.channel.send(embed=base_embed('❌ По заявке отказ',f"Кандидат: <@{app['applicant_id']}>\nРекрутер: {i.user.mention}\nПричина: {discord.utils.escape_markdown(reason)}",0xD64045),allowed_mentions=discord.AllowedMentions.none())
             from .profiles import refresh_member
             await refresh_member(self.bot,i.guild,app['applicant_id'],create=False)
             await self.bot.send_or_update_leaderboard(i.guild)
-            if isinstance(i.channel,discord.Thread): await i.channel.edit(archived=True,locked=True)
+
 
 
 async def recruiter_board(db,guild_id,days):
