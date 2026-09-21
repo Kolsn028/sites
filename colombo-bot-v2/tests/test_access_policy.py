@@ -47,8 +47,10 @@ class AccessPolicy(unittest.TestCase):
             self.assertTrue(access.may_confirm_attendance(member(roles, uid), CFG, event))
 
     def test_setup_name_lookup_only_before_configuration(self):
-        resolver = lambda guild,key: NS(id=3) if key=='high_staff_role_id' else None
-        self.assertTrue(access.may_setup(member([3]), {}, resolver))
-        self.assertFalse(access.may_setup(member([3]), {'role_schema_version':2}, resolver))
-        self.assertFalse(access.may_setup(member([4]), {}, resolver))
+        resolver = lambda guild,key: NS(id=1) if key=='leader_role_id' else None
+        self.assertTrue(access.may_setup(member([1]), {}, resolver))
+        self.assertFalse(access.may_setup(member([1]), {'role_schema_version':2}, resolver))
+        self.assertFalse(access.may_setup(member([3]), {}, resolver))
         self.assertFalse(access.may_setup(member(admin=True), {}, resolver))
+        self.assertFalse(access.may_setup(member(uid=99), {}, resolver))
+        self.assertFalse(access.may_setup(member([1]), {'leader_role_id':9}, resolver))

@@ -43,7 +43,7 @@ class VacationModal(SafeModal, title="Заявка на отдых"):
         leaders = configured_roles(interaction.guild, cfg, HIGH_KEYS)
         if not any(leaders):
             await self.bot.db.update_vacation(vid, status="failed", updated_at=self.bot.now_iso())
-            raise ValueError("Настрой роли руководства через `/setup_auto`.")
+            raise ValueError("Настрой роли руководства через `/setup`.")
         try:
             thread = await private_thread(review_ch, interaction.user, leaders, f"отдых-{vid}-{interaction.user.display_name}")
         except Exception:
