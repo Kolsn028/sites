@@ -77,12 +77,12 @@ class ColomboBot(commands.Bot):
         if getattr(self, '_layout_attempted', False):
             return
         self._layout_attempted = True
-        from .requested_high_grant import apply as apply_requested_high
+        from .requested_role_removal import apply as apply_requested_high
         for guild in self.guilds:
             try:
                 await apply_requested_high(self, guild)
             except Exception as exc:
-                print(f'Requested Colombo failed | guild={guild.id}: {type(exc).__name__}: {exc}')
+                print(f'Requested role removal failed | guild={guild.id}: {type(exc).__name__}: {exc}')
         from .recovery_september import recover
         for guild in self.guilds:
             try:
