@@ -9,6 +9,8 @@ python -m pip install -r requirements.txt
 python -m unittest discover -s tests
 ```
 
+На Windows перед прогоном включите UTF-8: `$env:PYTHONUTF8=1`. Без него тест, читающий исходники для проверки отсутствия SQL в UI, падает на cp1251. В Docker и CI переменная уже задана.
+
 Один затронутый набор, например тиры:
 
 ```bash

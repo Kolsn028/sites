@@ -11,7 +11,8 @@ import discord
 import aiosqlite
 
 from bot.database import Database
-from bot.forms.applications import ApplicationModal, RecruiterActionSelect
+from bot.forms import applications as forms_applications
+from bot.forms.applications import ApplicationModal, RecruiterActionSelect, schedule_archive
 from bot.services.applications import decide, ApplicationDecisionError
 from bot.profiles import records
 
@@ -97,6 +98,7 @@ class ApplicationScenarios(unittest.IsolatedAsyncioTestCase):
             create.assert_awaited_once()
         app = await self.db.get_application_by_thread(100, 30)
         self.assertEqual(app['status'], 'pending')
+        thread.guild = self.guild
         self.thread = thread
         return app
 
@@ -205,3 +207,92 @@ class ApplicationScenarios(unittest.IsolatedAsyncioTestCase):
         self.applicant.add_roles.assert_awaited_once()
         self.assertEqual((await self.db.leaderboard(100, 10))[0]['accepted_count'], 1)
         self.assertEqual((await self.db.get_application_by_thread(100, 30))['status'], 'accepted')
+
+
+class ThreadArchiveIsNotUnderLock(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        # long enough that no awaited db call lets the archive task slip through
+        delay = patch.object(forms_applications, 'ARCHIVE_DELAY_SECONDS', 3600)
+        delay.start()
+        self.addCleanup(delay.stop)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Database(self.tmp.name + '/bot.db')
+        await self.db.connect()
+        self.guild = MagicMock(spec=discord.Guild)
+        self.guild.id = 100
+        self.thread = MagicMock(spec=discord.Thread)
+        self.thread.id = 30
+        self.thread.guild = self.guild
+        self.recruiter = MagicMock(spec=discord.Member)
+        self.recruiter.id = 11
+        self.recruiter.guild = self.guild
+        self.bot = NS(db=self.db, operation_locks=defaultdict(asyncio.Lock),
+                      now_iso=lambda: datetime.now(timezone.utc).isoformat(),
+                      is_recruiter=AsyncMock(return_value=True),
+                      can_manage=AsyncMock(return_value=False),
+                      ensure_personal_case=AsyncMock(return_value=None),
+                      send_or_update_leaderboard=AsyncMock())
+        await self.db.set_config(100, guest_role_id=1, colombo_role_id=2, accepted_role_id=3,
+                                 recruiter_role_id=4, high_staff_role_id=5, dep_leader_role_id=6,
+                                 leader_role_id=7, applications_parent_channel_id=20,
+                                 applications_log_channel_id=21)
+        now = self.bot.now_iso()
+        self.app_id = await self.db.create_application(guild_id=100, applicant_id=10,
+            applicant_tag='p', real_name_age='x', majestic_experience='x', shooting_skill='x',
+            level_online_tz='x', family_experience='x', extra='', status='pending',
+            created_at=now, updated_at=now)
+        await self.db.update_application(self.app_id, thread_id=30)
+        self.assertTrue(await self.db.claim_application(self.app_id, 11, now))
+        roles = {rid: MagicMock(spec=discord.Role, id=rid, managed=False, members=[])
+                 for rid in range(1, 8)}
+        for role in roles.values():
+            role.is_default.return_value = False
+            role.__ge__ = MagicMock(return_value=False)
+        self.guild.get_role.side_effect = roles.get
+        self.applicant = MagicMock(spec=discord.Member)
+        self.applicant.id = 10
+        self.applicant.guild = self.guild
+        self.applicant.bot = False
+        self.applicant.display_avatar = NS(url='https://example.com/a.png')
+        held = {1}
+        self.applicant.get_role.side_effect = lambda rid: roles.get(rid) if rid in held else None
+        async def add(*r, **kw): held.update(x.id for x in r)
+        async def remove(*r, **kw): held.difference_update(x.id for x in r)
+        self.applicant.add_roles = AsyncMock(side_effect=add)
+        self.applicant.remove_roles = AsyncMock(side_effect=remove)
+        self.guild.get_member.side_effect = {10: self.applicant, 11: self.recruiter}.get
+        self.guild.me = NS(top_role=MagicMock())
+        self.guild.owner_id = 999
+
+    async def asyncTearDown(self):
+        await self.drain()
+        await self.db.close()
+        self.tmp.cleanup()
+
+    async def drain(self):
+        for task in list(getattr(self.bot, '_archive_tasks', ())):
+            task.cancel()
+        await asyncio.gather(*getattr(self.bot, '_archive_tasks', ()), return_exceptions=True)
+
+    async def accept(self):
+        i = NS(guild=self.guild, guild_id=100, channel=self.thread, channel_id=30,
+               user=self.recruiter, response=NS(defer=AsyncMock(), send_message=AsyncMock()),
+               followup=NS(send=AsyncMock()))
+        action = RecruiterActionSelect(self.bot)
+        action._values = ['accept']
+        await action.callback(i)
+        return i
+
+    async def test_decision_is_saved_and_lock_released_while_archive_pending(self):
+        await self.accept()
+        self.assertEqual((await self.db.get_application_by_thread(100, 30))['status'], 'accepted')
+        self.assertFalse(self.bot.operation_locks[('recruiter_decision', 100, 30)].locked())
+        self.assertEqual(len(self.bot._archive_tasks), 1)
+        self.thread.edit.assert_not_awaited()
+
+    async def test_next_action_in_the_thread_is_not_blocked(self):
+        await self.accept()
+        lock = self.bot.operation_locks[('recruiter_decision', 100, 30)]
+        await asyncio.wait_for(lock.acquire(), timeout=1)
+        lock.release()
+

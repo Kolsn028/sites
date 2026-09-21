@@ -6,7 +6,15 @@ import discord
 from ..ui import base_embed
 from ..recruiting import update_assignment_card, interview_room
 from ..roles import notify_recruiters, application_recruiters
-from ..interactions import SafeModal, SafeView, serialized, private_thread
+from ..interactions import SafeModal, SafeView, serialized, private_thread, ensure_members_cached
+
+ARCHIVE_DELAY_SECONDS = 5
+
+from ..thread_archive import schedule_archive as durable_schedule_archive
+
+
+async def schedule_archive(bot, channel):
+    return await durable_schedule_archive(bot, channel, ARCHIVE_DELAY_SECONDS)
 
 
 class ApplicationModal(SafeModal, title="Подать заявку"):
@@ -51,8 +59,8 @@ class ApplicationModal(SafeModal, title="Подать заявку"):
             updated_at=now,
         )
 
-        if not interaction.guild.chunked:
-            await interaction.guild.chunk(cache=True)
+        # application_recruiters() reads role.members
+        await ensure_members_cached(interaction.guild)
         try:
             thread = await private_thread(parent, interaction.user, [],
                                           f"заявка-{app_id}-{interaction.user.display_name}",
@@ -184,6 +192,7 @@ class RecruiterActionSelect(discord.ui.Select):
         except ApplicationDecisionError as exc:
             return await interaction.followup.send(str(exc), ephemeral=True)
 
+        await schedule_archive(self.bot, interaction.channel)
         await interaction.followup.send("✅ Решение сохранено.", ephemeral=True)
         await interaction.channel.send(embed=base_embed(title, f"Рекрутер: {interaction.user.mention}\nКандидат: <@{app['applicant_id']}>", color))
         if accepted:
@@ -198,12 +207,7 @@ class RecruiterActionSelect(discord.ui.Select):
             if case_ch:
                 await interaction.channel.send(f"📁 Личное дело: {case_ch.mention}")
 
-        await asyncio.sleep(5)
-        if isinstance(interaction.channel, discord.Thread):
-            try:
-                await interaction.channel.edit(archived=True, locked=True)
-            except discord.DiscordException:
-                pass
+
 
 
 class RecruiterActionView(SafeView):

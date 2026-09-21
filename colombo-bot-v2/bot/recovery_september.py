@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 GUILD_ID = 1503854540116721747
 ACTION = 'recovery:september-2026:v1'
+COMPLETE = 'recovery:september-2026:v1:complete'
 ROLES = {
     'guest_role_id': 1544392761493688460,
     'colombo_role_id': 1503855996236337182,
@@ -61,6 +62,18 @@ def parse_leaves(text):
 
 async def marker(db):
     return await db._one('SELECT * FROM audit_actions WHERE guild_id=? AND action=?', (GUILD_ID, ACTION))
+
+
+async def completed(db):
+    return await db._one('SELECT id FROM audit_actions WHERE guild_id=? AND action=?', (GUILD_ID, COMPLETE))
+
+
+async def mark_complete(db, bot_id, now):
+    # committing here also wakes the backup worker
+    async with db.lock:
+        await db.conn.execute('INSERT INTO audit_actions(guild_id,actor_id,action,target_id,details,created_at) VALUES (?,?,?,?,?,?)',
+                              (GUILD_ID, bot_id, COMPLETE, OLD_BOARD, json.dumps({'migration': ACTION}, ensure_ascii=False), now))
+        await db.conn.commit()
 
 
 async def apply_records(db, old, recent, leaves, bot_id, now):
@@ -131,6 +144,8 @@ async def recover(bot, guild):
     if guild.id != GUILD_ID:
         return
     async with bot.operation_locks[('setup', guild.id)]:
+        if await completed(bot.db):
+            return
         if not await marker(bot.db):
             # No migration against empty state: keep the new period and other records.
             cfg = await bot.db.get_config(guild.id)
@@ -158,5 +173,6 @@ async def recover(bot, guild):
                     await member.add_roles(role, reason='Colombo: восстановление одобренного отпуска')
         await bot.send_or_update_leaderboard(guild)
         await bot.update_vacation_status(guild)
+        await mark_complete(bot.db, bot.user.id, datetime.now(timezone.utc).isoformat())
     await bot.backups.save(guild)
     print(f'September recovery verified | guild={guild.id} | backup={bot.backups.saved_at.get(guild.id)}')

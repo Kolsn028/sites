@@ -81,7 +81,7 @@ class RepositoryScenarios(unittest.IsolatedAsyncioTestCase):
         files += [root/name for name in ('commands.py','events.py','progression.py',
                                         'tiers.py','leave.py','profiles.py','dashboard.py')]
         for path in files:
-            for node in ast.walk(ast.parse(path.read_text())):
+            for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
                 if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute):
                     with self.subTest(file=path.name,line=node.lineno):
                         self.assertNotIn(node.func.attr,{'_one','_all','execute','executemany','executescript'})
