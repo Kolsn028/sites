@@ -1,12 +1,9 @@
 """All roster mutations use the database lock; counters never exceed seat limits."""
 import json
 from datetime import datetime, timezone
-from .roles import is_leader, has_role, HIGH_KEYS
+from .access import may_confirm_attendance as may_confirm
 
 
-def may_confirm(member, cfg, event):
-    return is_leader(member,cfg) or bool(has_role(member,cfg,('dep_leader_role_id',))) or (
-        member.id==event['creator_id'] and bool(has_role(member,cfg,HIGH_KEYS)))
 
 
 async def audit(db,guild_id,actor,action,target,details):

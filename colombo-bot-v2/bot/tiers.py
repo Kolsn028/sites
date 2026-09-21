@@ -6,28 +6,17 @@ from .performance import edit_if_changed
 from .interactions import SafeModal,SafeView,private_thread
 from .roles import STAFF_KEYS,configured_roles
 from .ui import base_embed
-GUILD_ID=1503854540116721747
-TIERCHECK_ROLE_ID=1549336543527960636
-TIER_ROLES={1:1549336886886015046,2:1549337062497452183,3:1549337206139785266}
+from .access import TIER_GUILD_ID as GUILD_ID, TIERCHECK_ROLE_ID, may_review_tiers
+from .services.ranks import TIER_ROLES
 KINDS=('tier_1','tier_2','tier_3')
 
 async def can_review(bot,i):
-    return i.guild_id==GUILD_ID and isinstance(i.user,discord.Member) and bool(i.user.get_role(TIERCHECK_ROLE_ID))
+    return isinstance(i.user, discord.Member) and may_review_tiers(i.user, i.guild_id)
 
 def panel(tier):
     return base_embed(f'Повышение на тир {tier}','Прикрепи ссылки на откаты и расскажи, зачем тебе нужен тир.\nРассматривают **tiercheck**. При одобрении другие тиры заменяются выбранным.',0xA82D40)
 
-async def award_tier(guild,member,tier):
-    if guild.id!=GUILD_ID or tier not in TIER_ROLES:raise ValueError('Неизвестный сервер или тир.')
-    roles={n:guild.get_role(rid) for n,rid in TIER_ROLES.items()}
-    if not guild.me.guild_permissions.manage_roles:raise ValueError('Боту нужно право «Управлять ролями».')
-    for r in roles.values():
-        if not r or r.managed or r.is_default() or r>=guild.me.top_role:raise ValueError('Подними роль бота выше всех трёх тиров.')
-    if not member.get_role(roles[tier].id):await member.add_roles(roles[tier],reason=f'Colombo: одобрен тир {tier}')
-    old=[r for n,r in roles.items() if n!=tier and member.get_role(r.id)]
-    if old:await member.remove_roles(*old,reason=f'Colombo: замена на тир {tier}')
-    fresh=await guild.fetch_member(member.id)
-    if {r.id for r in fresh.roles}&set(TIER_ROLES.values())!={TIER_ROLES[tier]}:raise ValueError('Discord не подтвердил замену. Повтори одобрение.')
+from .services.ranks import award_tier
 
 class TierModal(SafeModal):
     identity=discord.ui.TextInput(label='Ник / возраст / статик',placeholder='Nickname / 23 / 4949',max_length=150)
@@ -44,7 +33,7 @@ class TierModal(SafeModal):
         if i.guild_id!=GUILD_ID or not isinstance(i.user,discord.Member) or not await self.bot.is_family_member(i.user):return await i.response.send_message('Заявки доступны участникам Colombo.',ephemeral=True)
         await i.response.defer(ephemeral=True)
         async with self.bot.operation_locks[('tier_member',i.guild_id,i.user.id)]:
-            existing=await self.bot.db._one("SELECT thread_id FROM progress_requests WHERE guild_id=? AND member_id=? AND kind IN ('tier_1','tier_2','tier_3') AND status IN ('pending','applying')",(i.guild_id,i.user.id))
+            existing=await self.bot.db.find_open_tier(i.guild_id, i.user.id)
             if existing:return await i.followup.send(f"У тебя уже есть заявка: <#{existing['thread_id']}>.",ephemeral=True)
             if (getattr(i.channel,'topic',None) or '')!=f'colombo:tier:{self.tier}:{self.bot.user.id}:{i.guild_id}':raise ValueError('Открой актуальный канал тира.')
             if not i.guild.get_role(TIER_ROLES[self.tier]):raise ValueError('Роль тира удалена. Сообщи High.')
@@ -53,16 +42,14 @@ class TierModal(SafeModal):
             thread=await private_thread(i.channel,i.user,[reviewer_role],f'тир-{self.tier}-{i.user.display_name}')
             fields=[('Ник / возраст / статик',str(self.identity)),('Откаты с ГГ',str(self.gg)),('Откаты с Каптов',str(self.kapt)),('Откаты с МЦЛ',str(self.mcl) or 'Не приложены'),('Для чего нужен тир',str(self.purpose))]
             try:
-                async with self.bot.db.lock:
-                    cur=await self.bot.db.conn.execute('INSERT INTO progress_requests(guild_id,member_id,kind,thread_id,details,created_at) VALUES (?,?,?,?,?,?)',(i.guild_id,i.user.id,f'tier_{self.tier}',thread.id,json.dumps(fields,ensure_ascii=False),self.bot.now_iso()));rid=cur.lastrowid;await self.bot.db.conn.commit()
+                rid = await self.bot.db.create_progress(i.guild_id, i.user.id, f'tier_{self.tier}', thread.id, json.dumps(fields, ensure_ascii=False), self.bot.now_iso())
             except Exception:
                 await thread.delete(reason='Colombo: ошибка сохранения заявки');raise
             e=base_embed(f'Заявка #{rid} • тир {self.tier}',f'Участник: {i.user.mention}',0xD5A43A)
             for name,value in fields:e.add_field(name=name,value=value,inline=False)
             try:await thread.send(embed=e,view=TierReviewView(self.bot),allowed_mentions=discord.AllowedMentions.none())
             except Exception:
-                async with self.bot.db.lock:
-                    await self.bot.db.conn.execute("UPDATE progress_requests SET status='failed' WHERE id=?",(rid,));await self.bot.db.conn.commit()
+                await self.bot.db.fail_progress(rid)
                 raise
             await i.followup.send(f'Заявка отправлена: {thread.mention}',ephemeral=True)
             # Notify in the parent channel; application details stay in the private thread.
@@ -91,10 +78,10 @@ class TierDecision(SafeModal):
         reason=str(self.reason).strip()
         if len(reason)<3:return await i.response.send_message('Напиши комментарий не короче трёх символов.',ephemeral=True)
         await i.response.defer(ephemeral=True)
-        row=await self.bot.db._one('SELECT * FROM progress_requests WHERE guild_id=? AND thread_id=?',(i.guild_id,i.channel_id))
+        row=await self.bot.db.progress_by_thread(i.guild_id, i.channel_id)
         if not row or row['kind'] not in KINDS:return await i.followup.send('Заявка не найдена.',ephemeral=True)
         async with self.bot.operation_locks[('tier_member',i.guild_id,row['member_id'])]:
-            row=await self.bot.db._one('SELECT * FROM progress_requests WHERE id=?',(row['id'],))
+            row=await self.bot.db.progress_by_id(row['id'])
             if row['status'] not in ('pending','applying'):return await i.followup.send('Заявка уже закрыта.',ephemeral=True)
             if row['member_id']==i.user.id:return await i.followup.send('Свою заявку рассматривать нельзя.',ephemeral=True)
             if row['status']=='applying' and not self.accepted:return await i.followup.send('Замена роли уже началась. Заверши одобрение.',ephemeral=True)
@@ -102,15 +89,13 @@ class TierDecision(SafeModal):
             if self.accepted:
                 member=await i.guild.fetch_member(row['member_id'])
                 if not await self.bot.is_family_member(member):return await i.followup.send('Игрок больше не состоит в Colombo.',ephemeral=True)
-                async with self.bot.db.lock:
-                    await self.bot.db.conn.execute("UPDATE progress_requests SET status='applying',handled_by=?,decision=? WHERE id=?",(i.user.id,reason,row['id']));await self.bot.db.conn.commit()
+                await self.bot.db.set_progress_decision(row['id'], 'applying', i.user.id, reason)
                 try:await award_tier(i.guild,member,tier)
                 except (discord.DiscordException,ValueError) as exc:return await i.followup.send(f'Замена тира не завершена: {exc} Исправь права и повтори одобрение.',ephemeral=True)
             status='approved' if self.accepted else 'rejected'
             e=base_embed(f'✅ Тир {tier} одобрен' if self.accepted else f'❌ Отказ в тире {tier}',f"Участник: <@{row['member_id']}>\nРассмотрел: {i.user.mention}\n"+('Комментарий: ' if self.accepted else 'Причина отказа: ')+discord.utils.escape_markdown(reason),0x3BAA72 if self.accepted else 0xD64045)
             await i.channel.send(embed=e,allowed_mentions=discord.AllowedMentions.none())
-            async with self.bot.db.lock:
-                await self.bot.db.conn.execute('UPDATE progress_requests SET status=?,handled_by=?,decision=? WHERE id=?',(status,i.user.id,reason,row['id']));await self.bot.db.conn.commit()
+            await self.bot.db.set_progress_decision(row['id'], status, i.user.id, reason)
             dm=True
             try:
                 member=await i.guild.fetch_member(row['member_id']);await member.send(embed=e,allowed_mentions=discord.AllowedMentions.none())
@@ -173,7 +158,7 @@ async def _sync_reviewers(bot,guild,member=None):
     if member is None and not guild.chunked:await guild.chunk(cache=True)
     reviewers=[member] if member else list(role.members)
     reviewers=[m for m in reviewers if not m.bot and m.get_role(TIERCHECK_ROLE_ID)]
-    rows=await bot.db._all("SELECT member_id,thread_id FROM progress_requests WHERE guild_id=? AND kind IN ('tier_1','tier_2','tier_3')",(guild.id,))
+    rows=await bot.db.tier_threads(guild.id)
     added=0;failed=0
     for row in rows:
         async with bot.operation_locks[('tier_member',guild.id,row['member_id'])]:

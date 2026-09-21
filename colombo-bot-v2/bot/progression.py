@@ -14,16 +14,7 @@ RULES = ('**1 → 3 ранг**\n'
          'После одобрения бот заменит -Novizio- на main (3 ранг). Права останутся теми же.')
 
 
-async def award_main(bot, guild, member):
-    cfg = await bot.db.get_config(guild.id)
-    main = guild.get_role(cfg.get('main_role_id') or 0)
-    novice = guild.get_role(cfg.get('accepted_role_id') or 0)
-    if not main or not novice or main.managed or main >= guild.me.top_role or novice >= guild.me.top_role:
-        raise ValueError('Проверь /setup и подними роль бота выше main и -Novizio-. Повышение пока не подтверждено.')
-    # Add first so a failed removal never leaves the member without family access.
-    await member.add_roles(main, reason='Colombo: одобрено повышение до 3 ранга')
-    if member.get_role(novice.id):
-        await member.remove_roles(novice, reason='Colombo: Novizio заменена на main')
+from .services.ranks import award_main
 
 
 def contract_panel_embed():
@@ -46,16 +37,13 @@ async def submit(bot, i, kind, details):
         parent = i.guild.get_channel(cfg.get(f'{kind}_panel_channel_id') or 0)
         if not isinstance(parent, discord.TextChannel):
             raise ValueError('Сначала настрой сервер через /setup.')
-        existing = await bot.db._one('SELECT * FROM progress_requests WHERE guild_id=? AND member_id=? AND kind=? AND status=\'pending\'', (i.guild_id, i.user.id, kind))
+        existing = await bot.db.find_open_progress(i.guild_id, i.user.id, kind)
         if existing:
             return await i.followup.send(f"У тебя уже есть открытая ветка: <#{existing['thread_id']}>.", ephemeral=True)
         thread = await private_thread(parent, i.user, configured_roles(i.guild, cfg, STAFF_KEYS),
                                       f'{"контракт" if kind == "contract" else "повышение"}-{i.user.display_name}')
         try:
-            async with bot.db.lock:
-                await bot.db.conn.execute('INSERT INTO progress_requests(guild_id,member_id,kind,thread_id,details,created_at) VALUES (?,?,?,?,?,?)',
-                    (i.guild_id, i.user.id, kind, thread.id, details, bot.now_iso()))
-                await bot.db.conn.commit()
+            await bot.db.create_progress(i.guild_id, i.user.id, kind, thread.id, details, bot.now_iso())
             embed = base_embed('🟡 Проверка контракта' if kind == 'contract' else '🟡 Заявка на повышение',
                 f'Участник: {i.user.mention}\n{details}\n\n**Прикрепи скриншоты в эту ветку.**\n'
                 + ('Проверяют: Recruit- и выше. ' if kind == 'contract' else 'Повышение до 3 ранга проверяет Recruit- и выше. ') + 'Самостоятельное одобрение запрещено.')
@@ -63,9 +51,7 @@ async def submit(bot, i, kind, details):
                 embed.add_field(name='Что проверяет руководство', value='10 помощей • 10 разных каптов • 10 дней в семье • обзвон • активность', inline=False)
             await thread.send(embed=embed, view=ProgressReviewView(bot), allowed_mentions=discord.AllowedMentions.none())
         except Exception:
-            async with bot.db.lock:
-                await bot.db.conn.execute("DELETE FROM progress_requests WHERE thread_id=?", (thread.id,))
-                await bot.db.conn.commit()
+            await bot.db.delete_progress_thread(thread.id)
             await thread.delete(reason='Colombo: не удалось открыть заявку')
             raise
         notifier = notify_recruiters if kind == 'promotion' else notify_assistants
@@ -125,7 +111,7 @@ class DecisionModal(SafeModal, title='Решение по заявке'):
             return await i.response.send_message('Доступно только на сервере.', ephemeral=True)
         await i.response.defer(ephemeral=True, thinking=True)
         async with self.bot.operation_locks[('progress_decision', i.guild_id, self.thread_id)]:
-            row = await self.bot.db._one('SELECT * FROM progress_requests WHERE guild_id=? AND thread_id=?', (i.guild_id, self.thread_id))
+            row = await self.bot.db.progress_by_thread(i.guild_id, self.thread_id)
             if not row or row['kind'] not in ('contract','promotion') or row['status'] != 'pending':
                 return await i.followup.send('Заявка уже закрыта или не найдена.', ephemeral=True)
             allowed = await self.bot.can_promote(i.user) if row['kind'] == 'promotion' else await self.bot.is_high_staff(i.user)
@@ -153,10 +139,7 @@ class DecisionModal(SafeModal, title='Решение по заявке'):
                 f"Участник: <@{row['member_id']}>\nПроверил: {i.user.mention}\n{self.reason}"
                 + ('\n**3 ранг: main.** Роль -Novizio- заменена; права сохранены.' if self.accepted and row['kind']=='promotion' else ''),
                 0x3BAA72 if self.accepted else 0xD64045), allowed_mentions=discord.AllowedMentions.none())
-            async with self.bot.db.lock:
-                await self.bot.db.conn.execute('UPDATE progress_requests SET status=?,handled_by=?,decision=? WHERE thread_id=?',
-                    (status,i.user.id,str(self.reason),self.thread_id))
-                await self.bot.db.conn.commit()
+            await self.bot.db.decide_progress_thread(self.thread_id, status, i.user.id, str(self.reason))
             from .profiles import refresh_member
             await refresh_member(self.bot,i.guild,row['member_id'])
             await i.followup.send('Решение сохранено.', ephemeral=True)
@@ -167,7 +150,7 @@ class ProgressReviewView(SafeView):
     def __init__(self, bot):
         super().__init__(timeout=None); self.bot=bot
     async def decide(self, i, accepted):
-        row = await self.bot.db._one('SELECT kind FROM progress_requests WHERE guild_id=? AND thread_id=?', (i.guild_id, i.channel_id))
+        row = await self.bot.db.progress_kind_by_thread(i.guild_id, i.channel_id)
         if not row or row['kind'] not in ('contract','promotion') or not isinstance(i.user, discord.Member):
             return await i.response.send_message('Заявка не найдена.', ephemeral=True)
         allowed = await self.bot.can_promote(i.user) if row['kind'] == 'promotion' else await self.bot.is_high_staff(i.user)

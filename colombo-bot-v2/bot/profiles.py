@@ -3,7 +3,7 @@ import math
 from datetime import datetime, timezone, timedelta
 import discord
 from .performance import edit_if_changed
-from .roles import HIGH_KEYS, has_role, is_leader
+from .access import may_view_profiles
 from .ui import base_embed
 from .interactions import SafeView
 
@@ -16,13 +16,12 @@ STATUS={'approved':'✅ Подтверждено','pending_review':'🟡 Про�
 async def can_view(bot,guild,viewer,member_id):
     if not isinstance(viewer,discord.Member):return False
     cfg=await bot.db.get_config(guild.id)
-    return is_leader(viewer,cfg) or bool(has_role(viewer,cfg,HIGH_KEYS))
+    return may_view_profiles(viewer, cfg)
 
 
 async def records(db,guild_id,member_id,days=0):
     result=[]
-    events=await db._all('''SELECT e.*,s.attended,s.seat,s.confirmed_by,s.confirmed_at FROM event_signups s
-        JOIN family_events e ON e.id=s.event_id WHERE e.guild_id=? AND s.member_id=?''',(guild_id,member_id))
+    events=await db.member_events(guild_id, member_id)
     for e in events:
         result.append(dict(key=f"event:{e['id']}",category=e['kind'],kind='visit',
             status='approved' if e['attended'] else 'pending',title=e['title'],
@@ -30,21 +29,21 @@ async def records(db,guild_id,member_id,days=0):
             url=f"https://discord.com/channels/{guild_id}/{e['channel_id']}/{e['message_id']}",
             detail=(('✅ Подтверждено ранее' if not e['confirmed_by'] else '✅ Присутствовал') if e['attended'] else ('🕒 Записан' if e['status']=='open' else '⚪ Присутствие не подтверждено'))+
                 (' · резерв' if e['seat']=='reserve' else ' · основа'),points=0))
-    reports=await db._all('SELECT * FROM activity_submissions WHERE guild_id=? AND member_id=?',(guild_id,member_id))
+    reports=await db.member_reports(guild_id, member_id)
     for r in reports:
         result.append(dict(key=f"report:{r['id']}",category=r['category'],kind='report',status=r['status'],
             title=f"Отчёт #{r['id']}",date=r['created_at'],points=r['points'] if r['status']=='approved' else 0,
             url=f"https://discord.com/channels/{guild_id}/{r['case_channel_id']}/{r['source_message_id']}",
             detail=STATUS.get(r['status'],r['status'])+(f" · сбор #{r['event_id']}" if r.get('event_id') else '')))
-    contracts=await db._all("SELECT * FROM progress_requests WHERE guild_id=? AND member_id=? AND kind='contract'",(guild_id,member_id))
+    contracts=await db.member_contracts(guild_id, member_id)
     for r in contracts:
         result.append(dict(key=f"contract:{r['id']}",category='contract',kind='contract',status=r['status'],
             title=(r['details'].split('\n')[0])[:100],date=r['created_at'],points=0,
             url=f"https://discord.com/channels/{guild_id}/{r['thread_id']}",detail=STATUS.get(r['status'],r['status'])))
-    progress=await db._all("SELECT * FROM progress_requests WHERE guild_id=? AND member_id=? AND kind IN ('promotion','tier_1','tier_2','tier_3')",(guild_id,member_id))
+    progress=await db.member_promotions(guild_id, member_id)
     for r in progress:
         result.append(dict(key=f"promotion:{r['id']}",category='tier' if r['kind'].startswith('tier_') else 'promotion',kind='promotion',status=r['status'],title=f"{('Тир '+r['kind'][-1]) if r['kind'].startswith('tier_') else 'Повышение'} • заявка #{r['id']}",date=r['created_at'],points=0,url=f"https://discord.com/channels/{guild_id}/{r['thread_id']}",detail=STATUS.get(r['status'],r['status'])+' · '+(r['decision'] or 'Ожидает проверки')[:700]))
-    applications=await db._all("SELECT * FROM applications WHERE guild_id=? AND applicant_id=? AND status IN ('accepted','rejected')",(guild_id,member_id))
+    applications=await db.member_application_history(guild_id, member_id)
     for r in applications:
         result.append(dict(key=f"application:{r['id']}",category='application',kind='application',status=r['status'],title=f"Заявка в семью #{r['id']}",date=r.get('decided_at') or r['updated_at'],points=0,url=f"https://discord.com/channels/{guild_id}/{r['thread_id']}",detail=('✅ Принят' if r['status']=='accepted' else '❌ Отказ: '+(r.get('rejection_reason') or 'Причина в старой заявке не указана'))))
     cutoff=datetime.now(timezone.utc)-timedelta(days=days) if days else None
@@ -175,8 +174,7 @@ async def refresh_member(bot,guild,member_id,create=True):
                         msg=old;break
             if msg:await edit_if_changed(msg,embed=e,view=ProfileLauncher(bot),allowed_mentions=discord.AllowedMentions.none())
             else:msg=await ch.send(embed=e,view=ProfileLauncher(bot),allowed_mentions=discord.AllowedMentions.none())
-            async with bot.db.lock:
-                await bot.db.conn.execute('UPDATE personal_cases SET profile_message_id=? WHERE id=?',(msg.id,case['id']));await bot.db.conn.commit()
+            await bot.db.set_profile_message(case['id'], msg.id)
         except discord.DiscordException as exc:
             print(f'Profile refresh failed member={member_id}: {type(exc).__name__}')
 

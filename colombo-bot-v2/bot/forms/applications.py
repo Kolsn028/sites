@@ -32,7 +32,7 @@ class ApplicationModal(SafeModal, title="Подать заявку"):
             return await interaction.response.send_message("⚠️ Система заявок не настроена. Выполните `/setup`.", ephemeral=True)
 
         await interaction.response.defer(ephemeral=True, thinking=True)
-        existing = await self.bot.db._one("SELECT id,thread_id FROM applications WHERE guild_id=? AND applicant_id=? AND status IN ('pending','interview') AND thread_id IS NOT NULL ORDER BY id DESC LIMIT 1", (interaction.guild.id, interaction.user.id))
+        existing = await self.bot.db.find_open_application(interaction.guild.id, interaction.user.id)
         if existing:
             return await interaction.followup.send(f"Твоя заявка уже рассматривается: <#{existing['thread_id']}>.", ephemeral=True)
         now = self.bot.now_iso()
@@ -177,17 +177,12 @@ class RecruiterActionSelect(discord.ui.Select):
         status = "accepted" if accepted else "rejected"
         color = 0x3BAA72 if accepted else 0xD64045
         title = "✅ Кандидат принят" if accepted else "❌ По заявке отказ"
-        if accepted:
-            if not applicant:
-                return await interaction.followup.send("Участник вышел с сервера. Решение не сохранено.", ephemeral=True)
-            from ..membership import accept_member
-            try:
-                await accept_member(applicant, cfg, f"Заявка #{app['id']}: принят в Colombo")
-            except (discord.DiscordException, ValueError) as exc:
-                return await interaction.followup.send(f"Не удалось завершить выдачу Colombo + Test и снятие Guest. Проверь роли и права бота, затем повтори приём. {exc}", ephemeral=True)
-        from ..enhancements import decide_application
-        if not await decide_application(self.bot.db, app['id'], interaction.guild_id, interaction.user.id, status, self.bot.now_iso()):
-            return await interaction.followup.send('Решение уже сохранено.', ephemeral=True)
+        from ..services.applications import decide, ApplicationDecisionError
+        try:
+            await decide(self.bot, interaction.guild, interaction.user, interaction.channel.id,
+                         accepted=accepted, expected_id=app['id'])
+        except ApplicationDecisionError as exc:
+            return await interaction.followup.send(str(exc), ephemeral=True)
 
         await interaction.followup.send("✅ Решение сохранено.", ephemeral=True)
         await interaction.channel.send(embed=base_embed(title, f"Рекрутер: {interaction.user.mention}\nКандидат: <@{app['applicant_id']}>", color))
