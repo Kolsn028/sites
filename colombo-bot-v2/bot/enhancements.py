@@ -13,20 +13,8 @@ def stamp(value):
 
 
 async def decide_application(db, app_id, guild_id, actor, status, now, reason=None):
-    if status not in ('accepted','rejected') or (status=='rejected' and not (reason or '').strip()):
-        raise ValueError('Для отказа нужна причина.')
-    async with db.lock:
-        await db.conn.execute('BEGIN IMMEDIATE')
-        try:
-            cur=await db.conn.execute("UPDATE applications SET status=?,handled_by=?,updated_at=?,decided_at=?,rejection_reason=?,interview_room_id=NULL,interview_until=NULL WHERE id=? AND guild_id=? AND status IN ('pending','interview')",(status,actor,now,now,reason,app_id,guild_id))
-            if not cur.rowcount:
-                await db.conn.rollback(); return False
-            await db.conn.execute('''INSERT INTO recruiter_stats(guild_id,recruiter_id,accepted_count,rejected_count) VALUES (?,?,?,?)
-                ON CONFLICT(guild_id,recruiter_id) DO UPDATE SET accepted_count=accepted_count+excluded.accepted_count,rejected_count=rejected_count+excluded.rejected_count''', (guild_id,actor,int(status=='accepted'),int(status=='rejected')))
-            await db.conn.commit()
-        except Exception:
-            await db.conn.rollback(); raise
-    return True
+    """Compatibility entry point; the atomic write lives with application data."""
+    return await db.record_application_decision(app_id, guild_id, actor, status, now, reason)
 
 
 class RejectionModal(SafeModal,title='Причина отказа'):
@@ -40,13 +28,12 @@ class RejectionModal(SafeModal,title='Причина отказа'):
             return await i.response.send_message('Нет доступа к рассмотрению заявок.',ephemeral=True)
         await i.response.defer(ephemeral=True)
         async with self.bot.operation_locks[('recruiter_decision',i.guild_id,i.channel_id)]:
-            app=await self.bot.db.get_application_by_thread(i.guild_id,i.channel_id)
-            if not app or app['id']!=self.app_id or not app.get('assigned_to'):
-                return await i.followup.send('Заявка изменилась. Открой её заново.',ephemeral=True)
-            if app['assigned_to']!=i.user.id and not await self.bot.can_manage(i.user):
-                return await i.followup.send('Отказ оформляет ответственный рекрутер.',ephemeral=True)
-            if not await decide_application(self.bot.db,app['id'],i.guild_id,i.user.id,'rejected',self.bot.now_iso(),reason):
-                return await i.followup.send('Заявка уже закрыта.',ephemeral=True)
+            from .services.applications import decide, ApplicationDecisionError
+            try:
+                app = await decide(self.bot, i.guild, i.user, i.channel_id,
+                                   accepted=False, reason=reason, expected_id=self.app_id)
+            except ApplicationDecisionError as exc:
+                return await i.followup.send(str(exc), ephemeral=True)
             await i.followup.send('Отказ и причина сохранены в истории игрока.',ephemeral=True)
             await i.channel.send(embed=base_embed('❌ По заявке отказ',f"Кандидат: <@{app['applicant_id']}>\nРекрутер: {i.user.mention}\nПричина: {discord.utils.escape_markdown(reason)}",0xD64045),allowed_mentions=discord.AllowedMentions.none())
             from .profiles import refresh_member

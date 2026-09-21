@@ -5,7 +5,14 @@ from pathlib import Path
 import aiosqlite
 
 
-class Database:
+from .repositories.writes import WriteRepository
+from .repositories.applications import ApplicationsRepository
+from .repositories.progress import ProgressRepository
+from .repositories.events import EventsRepository
+from .repositories.profiles import ProfilesRepository
+
+
+class Database(WriteRepository, ApplicationsRepository, ProgressRepository, EventsRepository, ProfilesRepository):
     def __init__(self, path: str):
         self.path = path
         self.conn: aiosqlite.Connection | None = None

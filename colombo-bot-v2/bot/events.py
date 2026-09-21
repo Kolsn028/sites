@@ -2,7 +2,7 @@
 from datetime import datetime, timezone, timedelta
 import discord
 from .performance import coalesced_panel, edit_if_changed
-from .roles import has_role, HIGH_KEYS, is_leader
+from .access import may_manage_events
 from .interactions import SafeView, SafeModal
 from .ui import base_embed
 from . import roster
@@ -10,9 +10,6 @@ from . import roster
 EVENTS = {'mcl': ('🟥', 'плюсы-mcl', 0xED4245), 'vzm': ('🟩', 'плюсы-vzm', 0x3BAA72),
           'vzz': ('🟦', 'плюсы-vzz', 0x3498DB), 'capt': ('➕', 'плюсы-на-капт', 0xF39C12)}
 
-
-def may_manage_events(member, cfg):
-    return is_leader(member, cfg) or bool(has_role(member, cfg, HIGH_KEYS))
 
 
 def parse_time(value,day=None,now=None):
@@ -34,11 +31,11 @@ async def allowed(bot, i):
 
 
 async def event_row(bot, guild_id, message_id):
-    return await bot.db._one('SELECT * FROM family_events WHERE guild_id=? AND message_id=?', (guild_id, message_id))
+    return await bot.db.event_by_message(guild_id, message_id)
 
 
 async def card(db, row):
-    people = await db._all('SELECT * FROM event_signups WHERE event_id=? ORDER BY joined_at,member_id', (row['id'],))
+    people = await db.event_participants(row['id'])
     e = base_embed(('🟢 ЗАПИСЬ ОТКРЫТА' if row['status']=='open' else '🛑 ЗАВЕРШЁН') + f" • {row['title']}",
         f"Создал: <@{row['creator_id']}>\nДата: <t:{row['starts_at']}:F> (<t:{row['starts_at']}:R>)\n"
         f"{row['details'] or ''}", EVENTS[row['kind']][2])
@@ -89,20 +86,15 @@ class CreateEventModal(SafeModal, title='Создать сбор • Colombo'):
         if not family_role.mentionable and not ch.permissions_for(i.guild.me).mention_everyone:
             raise ValueError('Для уведомления Colombo разреши боту упоминать все роли в этом канале.')
         await i.response.defer(ephemeral=True)
-        async with self.bot.db.lock:
-            cur=await self.bot.db.conn.execute('INSERT INTO family_events(guild_id,channel_id,creator_id,kind,title,starts_at,capacity,details,reserve_capacity) VALUES (?,?,?,?,?,?,?,?,?)',
-                (i.guild_id,ch.id,i.user.id,self.kind,EVENTS[self.kind][1].replace('плюсы-', '').upper(),ts,capacity,str(self.details_input),reserve))
-            eid=cur.lastrowid;await self.bot.db.conn.commit()
-        row=await self.bot.db._one('SELECT * FROM family_events WHERE id=?',(eid,))
+        eid = await self.bot.db.create_event(i.guild_id, ch.id, i.user.id, self.kind, EVENTS[self.kind][1].replace('плюсы-', '').upper(), ts, capacity, str(self.details_input), reserve)
+        row=await self.bot.db.event_by_id(eid)
         try:
             family_role=i.guild.get_role(cfg.get('colombo_role_id') or 0)
             msg=await ch.send(content=family_role.mention if family_role else None, embed=await card(self.bot.db,row),view=EventView(self.bot),allowed_mentions=discord.AllowedMentions(everyone=False,users=False,roles=[family_role] if family_role else [],replied_user=False))
         except Exception:
-            async with self.bot.db.lock:
-                await self.bot.db.conn.execute('DELETE FROM family_events WHERE id=?',(eid,));await self.bot.db.conn.commit()
+            await self.bot.db.delete_event(eid)
             raise
-        async with self.bot.db.lock:
-            await self.bot.db.conn.execute('UPDATE family_events SET message_id=? WHERE id=?',(msg.id,eid));await self.bot.db.conn.commit()
+        await self.bot.db.set_event_message(eid, msg.id)
         await i.followup.send(f'Сбор создан: {msg.jump_url}',ephemeral=True)
 
 
@@ -188,8 +180,7 @@ class EventView(SafeView):
         async with self.bot.operation_locks[('event',i.guild_id,i.message.id)]:
             row=await event_row(self.bot,i.guild_id,i.message.id)
             if not row: return await i.followup.send('Сбор не найден.',ephemeral=True)
-            async with self.bot.db.lock:
-                await self.bot.db.conn.execute("UPDATE family_events SET status='finished' WHERE id=?",(row['id'],));await self.bot.db.conn.commit()
+            await self.bot.db.finish_event(row['id'])
             row['status']='finished'
             view=EventView(self.bot)
             for item in view.children: item.disabled=item.custom_id!='colombo:event:manage'
@@ -265,8 +256,7 @@ class RosterManageView(SafeView):
         async with self.bot.operation_locks[('event',i.guild_id,self.message_id)]:
             row=await event_row(self.bot,i.guild_id,self.message_id)
             if not row: return await i.followup.send('Сбор не найден.',ephemeral=True)
-            async with self.bot.db.lock:
-                await self.bot.db.conn.execute("UPDATE family_events SET status='finished' WHERE id=?",(row['id'],));await self.bot.db.conn.commit()
+            await self.bot.db.finish_event(row['id'])
             row['status']='finished';view=EventView(self.bot)
             for item in view.children: item.disabled=item.custom_id!='colombo:event:manage'
             msg=await i.channel.fetch_message(self.message_id)
@@ -284,7 +274,7 @@ class RosterManageView(SafeView):
 async def choose_day(bot,i,kind,template=None):
     if not await allowed(bot,i):return await i.response.send_message('Создают сборы High и выше.',ephemeral=True)
     if template is None:
-        template=await bot.db._one('SELECT * FROM family_events WHERE guild_id=? AND kind=? AND message_id IS NOT NULL ORDER BY id DESC LIMIT 1',(i.guild_id,kind))
+        template=await bot.db.event_template(i.guild_id, kind)
     await i.response.send_message('Когда сбор? Время указывается по Москве. Места и описание можно изменить в форме.',view=DayView(bot,kind,template),ephemeral=True)
 
 

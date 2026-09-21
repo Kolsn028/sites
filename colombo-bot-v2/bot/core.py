@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .access import may_use_legacy_admin
 import os, re, asyncio
 from collections import defaultdict
 from datetime import date, datetime, timezone
@@ -157,7 +158,7 @@ class ColomboBot(commands.Bot):
 
     async def can_manage(self, member):
         cfg = await self.db.get_config(member.guild.id)
-        return is_leader(member, cfg) or has_role(member, cfg, ('dep_leader_role_id',)) or member.guild_permissions.administrator
+        return may_use_legacy_admin(member, cfg)
 
     async def is_recruiter(self, member):
         return may_recruit(member, await self.db.get_config(member.guild.id))

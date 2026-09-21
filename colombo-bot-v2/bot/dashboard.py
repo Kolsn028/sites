@@ -11,26 +11,9 @@ LABELS={'all':'Вся очередь','application':'Заявки в семью'
 async def high(bot,i):
     return isinstance(i.user,discord.Member) and may_manage_recruiters(i.user,await bot.db.get_config(i.guild_id))
 
-async def request_rows(db,gid,member_id=None,pending=False,kind='all',page=0):
-    # Owner filtering lives in every branch, never only in the UI.
-    parts=[];args=[]
-    specs=[('applications','application','applicant_id','thread_id','rejection_reason'),('vacations','vacation','member_id','thread_id','NULL'),('progress_requests',None,'member_id','thread_id','decision'),('activity_submissions','report','member_id','case_channel_id','note')]
-    for table,label,owner,channel,reason in specs:
-        category="kind" if label is None else "'"+label+"'"
-        actor='COALESCE(assigned_to,handled_by)' if table=='applications' else 'handled_by'
-        if table=='activity_submissions': actor='handled_by'
-        where='guild_id=?';params=[gid]
-        if member_id is not None: where+=f' AND {owner}=?';params.append(member_id)
-        if pending: where+=" AND status IN ('pending','interview','return_pending','pending_review','pending_classification','applying')"
-        parts.append(f'SELECT id,{category} kind,{owner} member_id,status,{channel} channel_id,{actor} actor,{reason} reason,created_at FROM {table} WHERE {where}')
-        args+=params
-    union=' UNION ALL '.join(parts)
-    filter_sql='' if kind=='all' else ' WHERE kind=?'
-    if kind!='all':args.append(kind)
-    total=await db._one('SELECT COUNT(*) n FROM ('+union+')'+filter_sql,args)
-    pages=max(1,(total['n']+7)//8);page=max(0,min(page,pages-1))
-    rows=await db._all('SELECT * FROM ('+union+')'+filter_sql+' ORDER BY created_at DESC,kind,id DESC LIMIT 8 OFFSET ?',[*args,page*8])
-    return rows,total['n'],page,pages
+async def request_rows(db, gid, member_id=None, pending=False, kind='all', page=0):
+    return await db.request_rows(gid, member_id, pending, kind, page)
+
 
 class RequestsView(SafeView):
     def __init__(self,bot,viewer_id,own=False,kind='all',page=0):

@@ -15,18 +15,12 @@ def admin_only():
 
 def register_commands(bot):
     async def setup_access(i):
-        from .roles import may_manage_recruiters
+        from .access import may_setup
+        from .roles import named_role
         if isinstance(i.user, discord.Member):
             cfg = await bot.db.get_config(i.guild_id)
-            if may_manage_recruiters(i.user, cfg):
+            if may_setup(i.user, cfg, named_role):
                 return True
-            # First setup must be possible before the role IDs have been saved.
-            if not cfg.get('role_schema_version'):
-                from .roles import HIGH_KEYS, named_role
-                for key in HIGH_KEYS:
-                    role = named_role(i.guild, key)
-                    if role and i.user.get_role(role.id):
-                        return True
         raise app_commands.CheckFailure('Настройка доступна только High, Deputy Leader, Leader и владельцу сервера.')
 
     @app_commands.guild_only()
@@ -150,18 +144,10 @@ def register_commands(bot):
         if not isinstance(i.user,discord.Member) or not await bot.is_high_staff(i.user):
             return await i.response.send_message('Только Recruit- и выше.',ephemeral=True)
         await i.response.defer(ephemeral=True)
-        async with bot.db.lock:
-            report=await bot.db.get_activity(report_id)
-            event=await bot.db._one('SELECT * FROM family_events WHERE id=? AND guild_id=?',(event_id,i.guild_id))
-            if not report or report['guild_id']!=i.guild_id or not event:
-                return await i.followup.send('Отчёт или сбор не найден на этом сервере.',ephemeral=True)
-            participation=await bot.db._one('SELECT 1 FROM event_signups WHERE event_id=? AND member_id=?',(event_id,report['member_id']))
-            if not participation:
-                return await i.followup.send('Автор отчёта не записан в этот сбор.',ephemeral=True)
-            await bot.db.conn.execute('UPDATE activity_submissions SET event_id=?,category=? WHERE id=?',(event_id,event['kind'],report_id))
-            from .roster import audit
-            await audit(bot.db,i.guild_id,i.user.id,'report_event',report_id,{'event':event_id})
-            await bot.db.conn.commit()
+        try:
+            report = await bot.db.link_report_event(i.guild_id, report_id, event_id, i.user.id)
+        except ValueError as exc:
+            return await i.followup.send(str(exc), ephemeral=True)
         from .profiles import refresh_member
         await refresh_member(bot,i.guild,report['member_id'])
         await i.followup.send('Отчёт связан со сбором. Подтверждение посещения остаётся за организатором.',ephemeral=True)

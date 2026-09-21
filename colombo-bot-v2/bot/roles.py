@@ -12,11 +12,12 @@ ROLE_SPECS = {
     'guest_role_id': ('Guest', 0x777777),
     'vacation_role_id': ('Отдых', 0x5BAE96),
 }
-STAFF_KEYS = ('leader_role_id', 'dep_leader_role_id', 'high_staff_role_id', 'recruiter_role_id')
-HIGH_KEYS = STAFF_KEYS[:3]
-REPORT_KEYS = STAFF_KEYS
-PROMOTION_KEYS = STAFF_KEYS
-MANAGEMENT_KEYS = HIGH_KEYS
+# Compatibility exports: existing modules can continue importing bot.roles.
+from .access import (
+    STAFF_KEYS, HIGH_KEYS, REPORT_KEYS, PROMOTION_KEYS, MANAGEMENT_KEYS,
+    has_role, is_leader, may_recruit, may_review_reports, may_promote,
+    may_manage_recruiters, may_review_vacation, is_family,
+)
 
 
 def named_role(guild, key):
@@ -32,37 +33,6 @@ def named_role(guild, key):
 def configured_roles(guild, cfg, keys):
     return [r for key in keys if (r := guild.get_role(cfg.get(key) or 0)) is not None]
 
-
-def has_role(member, cfg, keys):
-    return any(cfg.get(k) and member.get_role(cfg[k]) for k in keys)
-
-
-def is_leader(member, cfg):
-    return member.id == member.guild.owner_id or has_role(member, cfg, ('leader_role_id',))
-
-
-def may_recruit(member, cfg):
-    return is_leader(member, cfg) or bool(has_role(member, cfg, STAFF_KEYS))
-
-
-def may_review_reports(member, cfg):
-    return is_leader(member, cfg) or bool(has_role(member, cfg, REPORT_KEYS))
-
-
-def may_promote(member, cfg):
-    return is_leader(member, cfg) or bool(has_role(member, cfg, PROMOTION_KEYS))
-
-
-def may_manage_recruiters(member, cfg):
-    return is_leader(member, cfg) or bool(has_role(member, cfg, MANAGEMENT_KEYS))
-
-
-def may_review_vacation(member, cfg):
-    return is_leader(member, cfg) or bool(has_role(member, cfg, MANAGEMENT_KEYS))
-
-
-def is_family(member, cfg):
-    return is_leader(member, cfg) or has_role(member, cfg, STAFF_KEYS + ('accepted_role_id', 'main_role_id', 'colombo_role_id'))
 
 
 def assistant_mentions(guild, cfg):
