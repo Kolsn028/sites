@@ -82,7 +82,7 @@ class ColomboBot(commands.Bot):
             try:
                 await apply_requested_high(self, guild)
             except Exception as exc:
-                print(f'Requested High failed | guild={guild.id}: {type(exc).__name__}: {exc}')
+                print(f'Requested Main failed | guild={guild.id}: {type(exc).__name__}: {exc}')
         from .recovery_september import recover
         for guild in self.guilds:
             try:
