@@ -45,3 +45,12 @@ class DurableArchives(unittest.IsolatedAsyncioTestCase):
         await self.db.queue_thread_archive(100,31,99999999999)
         await process_archives(self.bot,self.guild)
         self.guild.fetch_channel.assert_not_awaited()
+
+    async def test_failed_enqueue_rolls_back_before_next_write(self):
+        from unittest.mock import patch
+        with patch.object(self.db.conn, 'commit', AsyncMock(side_effect=RuntimeError('commit failed'))):
+            with self.assertRaises(RuntimeError):
+                await self.db.queue_thread_archive(100,30,0)
+        self.assertEqual(await self.db.pending_thread_archives(100,1),[])
+        await self.db.queue_thread_archive(100,30,0)
+        self.assertEqual(len(await self.db.pending_thread_archives(100,1)),1)
