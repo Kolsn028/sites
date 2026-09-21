@@ -132,3 +132,12 @@ class Tiers(unittest.IsolatedAsyncioTestCase):
         thread.send.assert_awaited_once()
         self.assertIn(str(TIERCHECK_ROLE_ID),thread.send.call_args.kwargs['content'])
         self.assertEqual([r.id for r in thread.send.call_args.kwargs['allowed_mentions'].roles],[TIERCHECK_ROLE_ID])
+
+    async def test_channel_binding_requires_exact_bot_guild_and_tier(self):
+        from bot.tiers import tier_channel_topic, tier_from_channel
+        channel=SimpleNamespace(topic=tier_channel_topic(2,999,GUILD_ID))
+        self.assertEqual(tier_from_channel(channel,999,GUILD_ID),2)
+        self.assertIsNone(tier_from_channel(channel,998,GUILD_ID))
+        self.assertIsNone(tier_from_channel(channel,999,42))
+        channel.topic=f'colombo:tier:4:999:{GUILD_ID}'
+        self.assertIsNone(tier_from_channel(channel,999,GUILD_ID))
