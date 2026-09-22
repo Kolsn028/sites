@@ -11,7 +11,12 @@
 | Отдых и возвращение | bot/services/leave.py, bot/leave.py, bot/forms/vacations.py | test_leave_role_only.py |
 | Классификация и проверка активности | bot/forms/activities.py | test_forms_compatibility.py, test_workflows.py |
 | Контракты и повышения | bot/progression.py, bot/services/ranks.py | test_progression.py |
-| Тиры, tiercheck, доступ к веткам | bot/tiers.py | test_tiers.py |
+| Форма заявки на тир и кнопка подачи | bot/tier_system/applications.py | test_tiers.py |
+| Одобрение и отказ по тиру | bot/tier_system/review.py, bot/services/ranks.py | test_tiers.py |
+| Каналы тиров и панели подачи | bot/tier_system/channels.py, bot/tier_system/common.py | test_tiers.py |
+| Восстановление доступа tiercheck | bot/tier_system/reviewers.py | test_tiers.py, test_performance.py |
+| Лидерборд, отпуска и неактив | bot/panels.py | test_module_boundaries.py |
+| Фоновые расписания и повтор архивации | bot/background.py, bot/thread_archive.py | test_module_boundaries.py, test_thread_archive.py |
 | МП: карточки, основной и запасной состав | bot/events.py, bot/roster.py | test_events.py |
 | Личные дела и панели управления | bot/profiles.py, bot/forms/cases.py, bot/dashboard.py | test_dashboard.py |
 | SQLite, схема, миграции | bot/database.py, bot/repositories/, bot/schema_v9.py, bot/migration_v9.py | test_upgrade_v9.py |
@@ -48,3 +53,9 @@
 Подробности: [тиры](TIERS.md), [хранение](DISCORD_STORAGE.md), [частота сохранений](QUIET_LOGGING.md). Исторические инструкции требуют сверки с текущим кодом.
 
 Отложенное закрытие заявок: `bot/thread_archive.py`, `bot/repositories/archives.py`, `tests/test_thread_archive.py`. Очередь сохраняется в audit_actions и существующих копиях Discord; повторная попытка раз в минуту. Уведомления tiercheck отправляются внутри приватной ветки заявки, а не в канал панели.
+
+## Совместимость после разделения
+
+`bot/tiers.py` сохраняет прежние импорты классов и функций; реализация находится в `bot/tier_system/`. Внутри пакета используйте прямые импорты, не импортируйте фасад обратно. Модули заявок и рассмотрения зависят от common; настройка каналов использует панель заявки. Это исключает циклические импорты.
+
+`ColomboBot` наследует методы `PanelUpdates` и расписания `BackgroundTasks`. Существующие вызовы `bot.update_vacation_status(...)` и другие работают как раньше. Запуск и остановка расписаний остаются в core.py. Изменения структуры проверяются `tests/test_module_boundaries.py`; custom_id, схема базы и интервалы задач сохранены.

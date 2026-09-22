@@ -2,11 +2,12 @@ from __future__ import annotations
 from .access import may_use_legacy_admin
 import os, re, asyncio
 from collections import defaultdict
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from aiohttp import web
 import discord
-from .performance import edit_if_changed, coalesced_panel
-from discord.ext import commands, tasks
+from .panels import PanelUpdates
+from .background import BackgroundTasks
+from discord.ext import commands
 from .ui import base_embed
 from .roles import (
     has_role,
@@ -31,7 +32,7 @@ def safe_case_name(name, user_id):
     return f"дело-{(clean or str(user_id))[:70]}"[:95]
 
 
-class ColomboBot(commands.Bot):
+class ColomboBot(PanelUpdates, BackgroundTasks, commands.Bot):
     def __init__(self, *args, db, **kwargs):
         super().__init__(*args, **kwargs)
         self.db = db
@@ -427,160 +428,3 @@ class ColomboBot(commands.Bot):
             embed=e, view=ActivityClassifyView(self), mention_author=False
         )
         await self.db.update_activity(sid, review_message_id=review.id)
-
-    @coalesced_panel
-    async def send_or_update_leaderboard(self, guild):
-        c = await self.db.get_config(guild.id)
-        rows = await self.db.leaderboard(guild.id, 10)
-        medals = ["🥇", "🥈", "🥉"]
-        lines = []
-        for i, r in enumerate(rows):
-            lines.append(
-                f"{medals[i] if i<3 else f'`#{i+1}`'} <@{r['recruiter_id']}> — **{r['accepted_count']}** принято"
-                + (f" · {r['rejected_count']} отказов" if r["rejected_count"] else "")
-            )
-        e = base_embed(
-            "🏆 Лидерборд рекрутеров",
-            "\n".join(lines) if lines else "Пока нет данных.",
-            0xE5B64B,
-        )
-        ch = guild.get_channel(c.get("leaderboard_channel_id") or 0)
-        if not isinstance(ch, discord.TextChannel):
-            return None
-        mid = c.get("leaderboard_message_id")
-        if mid:
-            try:
-                m = await ch.fetch_message(mid)
-                await edit_if_changed(m, embed=e)
-                return m
-            except discord.NotFound:
-                pass
-        m = await ch.send(embed=e)
-        await self.db.set_config(guild.id, leaderboard_message_id=m.id)
-        return m
-
-    @coalesced_panel
-    async def update_vacation_status(self, guild):
-        c = await self.db.get_config(guild.id)
-        rows = await self.db.active_vacations(guild.id)
-        today = date.today()
-        lines = []
-        for r in rows:
-            end = date.fromisoformat(r["end_date"])
-            lines.append(
-                f"🌴 <@{r['member_id']}> — до **{end.strftime('%d.%m.%Y')}** · **{max((end-today).days,0)} дн.** · возврат по заявке"
-            )
-        e = base_embed(
-            "🌴 Кто сейчас в отпуске",
-            "\n".join(lines) if lines else "Сейчас активных отпусков нет.",
-            0x3BAA72,
-        )
-        ch = guild.get_channel(c.get("vacation_status_channel_id") or 0)
-        if not isinstance(ch, discord.TextChannel):
-            return None
-        mid = c.get("vacation_status_message_id")
-        if mid:
-            try:
-                m = await ch.fetch_message(mid)
-                await edit_if_changed(m, embed=e)
-                return m
-            except discord.NotFound:
-                pass
-        m = await ch.send(embed=e)
-        await self.db.set_config(guild.id, vacation_status_message_id=m.id)
-        return m
-
-    async def inactive_members(self, guild, days):
-        rows = await self.db.last_activity_for_cases(guild.id)
-        vacations = {x["member_id"] for x in await self.db.active_vacations(guild.id)}
-        now = datetime.now(timezone.utc)
-        out = []
-        for r in rows:
-            if r["member_id"] in vacations:
-                continue
-            m = guild.get_member(r["member_id"])
-            if not m:
-                continue
-            raw = r["last_activity"] or r["case_created_at"]
-            dt = datetime.fromisoformat(raw)
-            dt = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-            d = int((now - dt).total_seconds() / 86400)
-            if d >= days:
-                out.append((m, d, r["last_activity"]))
-        return sorted(out, key=lambda x: x[1], reverse=True)
-
-    @coalesced_panel
-    async def update_inactivity_report(self, guild):
-        c = await self.db.get_config(guild.id)
-        days = int(os.getenv("INACTIVITY_DAYS_DEFAULT", "3"))
-        rows = await self.inactive_members(guild, days)
-        lines = [f"⚠️ {m.mention} — **{d} дн.**" for m, d, _ in rows[:30]]
-        e = base_embed(
-            f"📉 Контроль неактива • {days}+ дней",
-            "\n".join(lines) if lines else "✅ Участников с таким неактивом нет.",
-            0xD64045 if lines else 0x3BAA72,
-        )
-        e.set_footer(
-            text="Одобренный отпуск автоматически исключает участника из неактива."
-        )
-        ch = guild.get_channel(c.get("inactivity_report_channel_id") or 0)
-        if not isinstance(ch, discord.TextChannel):
-            return None
-        mid = c.get("inactivity_report_message_id")
-        if mid:
-            try:
-                m = await ch.fetch_message(mid)
-                await edit_if_changed(m, embed=e)
-                return m
-            except discord.NotFound:
-                pass
-        m = await ch.send(embed=e)
-        await self.db.set_config(guild.id, inactivity_report_message_id=m.id)
-        return m
-
-    async def expire_vacations(self, guild):
-        # The date is informational: only an approved return restores roles.
-        await self.update_vacation_status(guild)
-
-    @tasks.loop(hours=1)
-    async def housekeeping(self):
-        for g in self.guilds:
-            try:
-                await self.expire_vacations(g)
-                await self.update_inactivity_report(g)
-            except Exception as e:
-                print(f"housekeeping[{g.id}]", e)
-
-    @housekeeping.before_loop
-    async def before_housekeeping(self):
-        await self.wait_until_ready()
-
-    @tasks.loop(minutes=5)
-    async def application_reminders(self):
-        from .enhancements import remind_applications
-
-        for guild in self.guilds:
-            try:
-                await remind_applications(self, guild)
-            except Exception as exc:
-                print(f"Application reminders failed | guild={guild.id}: {exc}")
-
-    @application_reminders.before_loop
-    async def before_application_reminders(self):
-        await self.wait_until_ready()
-
-    @tasks.loop(minutes=1)
-    async def archive_worker(self):
-        from .thread_archive import process_archives
-
-        for guild in self.guilds:
-            try:
-                await process_archives(self, guild)
-            except Exception as exc:
-                print(
-                    f"Archive queue error | guild={guild.id}: {type(exc).__name__}: {exc}"
-                )
-
-    @archive_worker.before_loop
-    async def before_archive_worker(self):
-        await self.wait_until_ready()

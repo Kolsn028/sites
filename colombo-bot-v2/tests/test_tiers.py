@@ -125,7 +125,7 @@ class Tiers(unittest.IsolatedAsyncioTestCase):
             db=SimpleNamespace(find_open_tier=AsyncMock(return_value=None),create_progress=AsyncMock(return_value=1)))
         i=SimpleNamespace(guild_id=GUILD_ID,guild=guild,user=user,channel=channel,
             response=SimpleNamespace(defer=AsyncMock()),followup=SimpleNamespace(send=AsyncMock()))
-        with patch('bot.tiers.private_thread',AsyncMock(return_value=thread)) as create:
+        with patch('bot.tier_system.applications.private_thread',AsyncMock(return_value=thread)) as create:
             await TierModal(bot,2).on_submit(i)
         create.assert_awaited_once()
         channel.send.assert_not_awaited()
