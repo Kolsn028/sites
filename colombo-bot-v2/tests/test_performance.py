@@ -58,7 +58,7 @@ class Performance(unittest.IsolatedAsyncioTestCase):
         bot=SimpleNamespace();guild=SimpleNamespace(id=GUILD_ID);member=SimpleNamespace(id=5)
         entered=asyncio.Event();release=asyncio.Event()
         async def actual(*_):entered.set();await release.wait();return (4,0)
-        with patch('bot.tiers._sync_reviewers',new=AsyncMock(side_effect=actual)) as repair:
+        with patch('bot.tier_system.reviewers._sync_reviewers',new=AsyncMock(side_effect=actual)) as repair:
             first=asyncio.create_task(sync_reviewers(bot,guild,member));await entered.wait()
             second=asyncio.create_task(sync_reviewers(bot,guild,member));await asyncio.sleep(0)
             release.set()
