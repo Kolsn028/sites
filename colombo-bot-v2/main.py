@@ -16,6 +16,11 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN не задан. Создай .env по примеру .env.example")
 
+if os.getenv("COLOMBO_UNINSTALL_MODE") in ("inventory", "delete"):
+    from bot.uninstall import run
+    run(TOKEN)
+    raise SystemExit(0)
+
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
